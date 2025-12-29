@@ -17,6 +17,8 @@ const SHRINK_VISUALS = {
     LV3: { scale: 0.2, yOffset: -21 }
 };
 
+const SAVE_KEY = 'fairy_rogue_save_v1';
+
 /**
  * ゲーム全体の進行管理クラス
  */
@@ -35,6 +37,8 @@ class BattleSystem {
         this.isPlayerTurn = true;
         this.enemyNextAction = null; // 敵の行動予定
         this.isHome = true; // 拠点にいるかどうかのフラグ
+        this.mode = 'normal'; // 'normal' | 'rogue'
+        this.backupData = null; // ローグライクモード用バックアップ
 
         this.tempInventory = []; // 探索中の仮取得アイテム
         this.permInventory = []; // 持ち帰り確定アイテム（未装備）
@@ -141,6 +145,216 @@ class BattleSystem {
         }
     }
 
+    // --- セーブ・ロード機能 ---
+
+    saveGame() {
+        if (!this.player) return;
+
+        const saveData = {
+            player: {
+                hp: this.player.hp,
+                maxHp: this.player.maxHp,
+                atk: this.player.atk,
+                def: this.player.def,
+                int: this.player.int,
+                spd: this.player.spd,
+                runStats: this.player.runStats,
+                flags: this.player.flags,
+                shrinkLevel: this.player.shrinkLevel,
+                minShrinkLevel: this.player.minShrinkLevel,
+                currentStatus: this.player.currentStatus ? { id: this.player.currentStatus.id, turns: this.player.statusTurn } : null,
+                buffs: this.player.buffs,
+                barrier: this.player.barrier,
+                dropQualityBonus: this.player.dropQualityBonus
+            },
+            inventory: this.permInventory,
+            equipment: this.equipment,
+            masterDeck: this.masterDeck.map(c => c.id),
+            cardPool: this.cardPool.map(c => c.id),
+            
+            game: {
+                depth: this.depth,
+                mode: this.mode,
+                backupData: this.backupData,
+                isHome: this.isHome,
+                restCount: this.restCount,
+                turn: this.turn,
+                tempInventory: this.tempInventory,
+                state: this.isHome ? 'home' : (this.enemy ? 'battle' : 'exploration')
+            },
+            
+            battle: null
+        };
+
+        // 戦闘中の場合、敵とデッキの状態も保存
+        if (!this.isHome && this.enemy) {
+            saveData.battle = {
+                enemy: {
+                    name: this.enemy.name,
+                    maxHp: this.enemy.maxHp,
+                    hp: this.enemy.hp,
+                    atk: this.enemy.atk,
+                    def: this.enemy.def,
+                    int: this.enemy.int,
+                    spd: this.enemy.spd,
+                    isBoss: this.enemy.isBoss,
+                    routineId: this.enemy.routineId,
+                    uniqueStatus: this.enemy.uniqueStatus,
+                    skipTurn: this.enemy.skipTurn,
+                    isDefending: this.enemy.isDefending
+                },
+                deck: {
+                    drawPile: this.deck.drawPile.map(c => c.id),
+                    hand: this.deck.hand.map(c => c.id),
+                    discardPile: this.deck.discardPile.map(c => c.id)
+                },
+                isPlayerTurn: this.isPlayerTurn,
+                enemyNextAction: this.enemyNextAction
+            };
+        }
+
+        try {
+            localStorage.setItem(SAVE_KEY, JSON.stringify(saveData));
+            console.log("Game Saved");
+        } catch (e) {
+            console.error("Save failed", e);
+        }
+    }
+
+    loadGame() {
+        const json = localStorage.getItem(SAVE_KEY);
+        if (!json) return false;
+
+        try {
+            const data = JSON.parse(json);
+            
+            // プレイヤー復元
+            Object.assign(this.player, data.player);
+            if (data.player.currentStatus) {
+                this.applyStatus(data.player.currentStatus.id, data.player.currentStatus.turns);
+            } else {
+                this.player.currentStatus = null;
+            }
+            this.player.buffs = data.player.buffs || [];
+
+            // インベントリ・装備復元
+            // IDベースで復元し、plusValue等の補正を再適用する
+            const restoreItem = (itemData) => {
+                if (!itemData) return null;
+
+                // ▼ 追加: ID欠落時の自動修復 (Auto-Repair) ▼
+                if (!itemData.id && itemData.name) {
+                    console.warn(`ID欠落アイテムを検出: ${itemData.name} -> 修復を試みます`);
+                    
+                    // 1. アクセサリー効果から検索
+                    const acc = ACCESSORY_EFFECTS.find(e => e.name === itemData.name);
+                    if (acc) {
+                        itemData.id = acc.id;
+                    }
+                    // 2. 伝説級装備から検索
+                    else {
+                        const legend = ENDGAME_ITEMS.find(e => e.name === itemData.name);
+                        if (legend) itemData.id = legend.id;
+                    }
+                }
+
+                // それでもIDがなければ復元不可
+                if (!itemData.id) return null;
+
+                let item = getItemById(itemData.id);
+                if (item) {
+                    // 強化値の復元とステータス加算
+                    if (itemData.plusValue > 0) {
+                        item.plusValue = itemData.plusValue;
+                        if (!item.name.includes(`(+${item.plusValue})`)) {
+                            item.name += `(+${item.plusValue})`;
+                        }
+                        // generateLootと同様の加算処理
+                        if (item.type === 'weapon') {
+                            if (item.atk > 0) item.atk += item.plusValue;
+                            if (item.int > 0) item.int += item.plusValue;
+                        } else if (item.type === 'armor') {
+                            if (item.def > 0) item.def += item.plusValue;
+                            if (item.atk > 0) item.atk += item.plusValue;
+                            if (item.int > 0) item.int += item.plusValue;
+                            if (item.spd > 0) item.spd += item.plusValue;
+                        }
+                    }
+                }
+                return item;
+            };
+
+            this.permInventory = (data.inventory || []).map(restoreItem).filter(i => i !== null);
+            
+            this.equipment = { weapon: null, armor: null, accessory: null };
+            if (data.equipment) {
+                if (data.equipment.weapon) this.equipment.weapon = restoreItem(data.equipment.weapon);
+                if (data.equipment.armor) this.equipment.armor = restoreItem(data.equipment.armor);
+                if (data.equipment.accessory) this.equipment.accessory = restoreItem(data.equipment.accessory);
+            }
+            
+            // デッキ復元
+            this.masterDeck = (data.masterDeck || []).map(id => CARD_DATABASE.find(c => c.id === id)).filter(c => c);
+            this.cardPool = (data.cardPool || []).map(id => CARD_DATABASE.find(c => c.id === id)).filter(c => c);
+            
+            // ゲーム状態復元
+            this.depth = data.game.depth;
+            this.mode = data.game.mode || 'normal';
+            this.backupData = data.game.backupData || null;
+            this.isHome = data.game.isHome;
+            this.restCount = data.game.restCount;
+            this.turn = data.game.turn;
+            this.tempInventory = data.game.tempInventory || [];
+            const state = data.game.state || (this.isHome ? 'home' : 'exploration');
+
+            // 戦闘復元
+            if (data.battle && !this.isHome) {
+                const e = data.battle.enemy;
+                this.enemy = new Unit(e.name, e.maxHp, e.atk, e.def, e.int, e.spd, e.isBoss);
+                Object.assign(this.enemy, e);
+                
+                this.deck.drawPile = data.battle.deck.drawPile.map(id => CARD_DATABASE.find(c => c.id === id));
+                this.deck.hand = data.battle.deck.hand.map(id => CARD_DATABASE.find(c => c.id === id));
+                this.deck.discardPile = data.battle.deck.discardPile.map(id => CARD_DATABASE.find(c => c.id === id));
+                
+                this.isPlayerTurn = data.battle.isPlayerTurn;
+                this.enemyNextAction = data.battle.enemyNextAction;
+
+                this.ui.systemCommands.style.display = 'none';
+                this.ui.battleCommands.style.display = 'flex';
+                this.menuUi.overlay.style.display = 'none';
+                
+                this.updateStatsUI();
+                this.updateDeckUI();
+                this.renderHandCards();
+                
+                if (this.isPlayerTurn) {
+                    this.setControlsEnabled(true);
+                } else {
+                    this.processEnemyTurn();
+                }
+                this.log("戦闘を再開します");
+            } else {
+                if (this.isHome) {
+                    this.showHome();
+                } else {
+                    // ダンジョン探索中（選択肢画面）
+                    this.ui.battleCommands.style.display = 'none';
+                    this.renderDungeonButtons();
+                    this.log("探索を再開します");
+                }
+            }
+            
+            this.recalcStats();
+            this.updateStatsUI();
+            this.showToast("ゲームを再開しました");
+            return true;
+        } catch (e) {
+            console.error("Load failed", e);
+            return false;
+        }
+    }
+
     // --- シーン管理 ---
 
     // Homeシーン表示
@@ -213,6 +427,9 @@ class BattleSystem {
         const actions = [
             { text: "探索開始", onClick: () => this.startDungeon() }
         ];
+        
+        // 試練の洞窟（ローグライク）ボタン
+        actions.push({ text: "試練の洞窟へ", onClick: () => this.confirmStartRogueMode() });
 
         // 所持品または装備がある場合は最強装備ボタンを表示 (Shortcut)
         if (this.permInventory.length > 0 || this.equipment.weapon || this.equipment.armor || this.equipment.accessory) {
@@ -227,6 +444,90 @@ class BattleSystem {
         // 妖精のメッセージ更新開始
         this.updateFairyMessage();
         this.startMessageTimer();
+        this.saveGame(); // 拠点セーブ
+    }
+
+    // --- ローグライクモード管理 ---
+
+    confirmStartRogueMode() {
+        if (confirm("【試練の洞窟】\n資産を持ち込めない「ローグライクモード」を開始します。\n現在の装備・デッキは一時的に預かり、終了時に返却されます。\nよろしいですか？")) {
+            this.startRogueMode();
+        }
+    }
+
+    startRogueMode() {
+        // 1. 資産バックアップ
+        this.backupData = JSON.parse(JSON.stringify({
+            player: {
+                hp: this.player.hp,
+                maxHp: this.player.maxHp,
+                atk: this.player.atk,
+                def: this.player.def,
+                int: this.player.int,
+                spd: this.player.spd,
+                runStats: this.player.runStats,
+                flags: this.player.flags
+            },
+            inventory: this.permInventory,
+            equipment: this.equipment,
+            masterDeck: this.masterDeck.map(c => c.id),
+            cardPool: this.cardPool.map(c => c.id)
+        }));
+
+        // 2. プレイヤー初期化 (Lv1相当, 初期デッキ, 装備なし)
+        this.player = new Unit("妖精", 100, 10, 5, 15, 12, false, true);
+        this.playerBaseStats = { maxHp: 100, atk: 10, def: 5, int: 15, spd: 12 };
+        this.permInventory = [];
+        this.equipment = { weapon: null, armor: null, accessory: null };
+        this.tempInventory = [];
+        
+        // 初期デッキ再設定
+        const initialIds = [
+            'fire', 'thunder', 'full_burst', 'snipe',
+            'reload', 'cure_all', 'heal', 'regen',
+            'skill_triple_pre', 'charge_weapon', 'shrink_surge', 'vampire_form'
+        ];
+        this.masterDeck = initialIds.map(id => CARD_DATABASE.find(c => c.id === id));
+        this.cardPool = [];
+
+        // 3. モード設定
+        this.mode = 'rogue';
+        this.depth = 0; // startDungeonでリセットされるが念のため
+
+        // 4. 開始
+        this.startDungeon();
+        this.showToast("【試練開始】装備とデッキは一時的に預かりました。", "warning");
+    }
+
+    endRogueMode() {
+        if (!this.backupData) return;
+
+        // 1. 資産復元 (loadGameの一部ロジックを流用するか、ここで簡易復元)
+        // ここでは簡易復元を行う（loadGameはlocalStorageから読むため）
+        // 実際にはバックアップデータ構造に合わせて復元が必要
+        // 今回はバックアップデータ構造が loadGame のデータ構造と似ているため、
+        // 必要な部分を手動で戻す
+        const data = this.backupData;
+        
+        Object.assign(this.player, data.player);
+        // ステータス等は再計算されるので基礎値だけ戻せば良いが、
+        // Unit生成時の初期値に戻してから装備等を適用するのが安全
+        // ここでは playerBaseStats も戻すべきだが、backupに含まれていないため
+        // 初期値に戻す
+        this.playerBaseStats = { maxHp: 100, atk: 10, def: 5, int: 15, spd: 12 };
+
+        this.permInventory = data.inventory;
+        this.equipment = data.equipment;
+        this.masterDeck = data.masterDeck.map(id => CARD_DATABASE.find(c => c.id === id)).filter(c => c);
+        this.cardPool = data.cardPool.map(id => CARD_DATABASE.find(c => c.id === id)).filter(c => c);
+
+        this.backupData = null;
+
+        // 2. モード戻し
+        this.mode = 'normal';
+        
+        this.recalcStats();
+        this.showToast("【試練終了】預かっていた装備とデッキを返却しました。", "success");
     }
 
     // 最強装備に変更（スロット対応版）
@@ -282,6 +583,7 @@ class BattleSystem {
         this.player.runStats.everEquipped = true;
 
         this.recalcStats();
+        this.saveGame(); // 装備変更セーブ
     }
 
     // ステータス再計算
@@ -483,25 +785,25 @@ class BattleSystem {
         this.player.maxHp = totalMaxHp;
         this.player.spd = totalSpd;
 
-        // --- 拠点での装備変更時の縮小化解除処理 ---
-        // 条件: 戦闘コマンドが表示されていない（＝拠点または編成画面）
-        if (this.ui.battleCommands.style.display === 'none') {
-            if (this.player.shrinkLevel > maxMinShrinkLevel) {
-                this.player.shrinkLevel = maxMinShrinkLevel;
-                this.player.hp = this.player.maxHp; // HP全回復
-                // updateStatsUIは呼び出し元で行われるか、この後の処理で反映される
-            }
+        // --- 縮小レベルの整合性チェック ---
+        // 装備による下限(maxMinShrinkLevel)と、呪い等による下限(player.minShrinkLevel)の大きい方を採用
+        const effectiveMin = Math.max(this.player.minShrinkLevel, maxMinShrinkLevel);
+
+        // 1. 下限チェック（常に適用）
+        // 現在のレベルが下限より小さいなら、強制的に引き上げる
+        if (this.player.shrinkLevel < effectiveMin) {
+            this.player.shrinkLevel = effectiveMin;
+        }
+        // 2. 解除チェック（拠点のみ適用）
+        // 拠点にいるなら、装備を外して下限が下がった時に、縮小レベルも下げる（元に戻す）
+        else if (this.isHome && this.player.shrinkLevel > effectiveMin) {
+            this.player.shrinkLevel = effectiveMin;
         }
 
         // --- 状態異常による補正 ---
         // 縮小化 (Shrink)
         // ※ shrink_lockアイテムがある場合、上で強制的にレベルが上がっている
         // ここでペナルティ計算を行う
-
-        // [拡張] 縮小下限チェック (呪い等)
-        if (this.player.shrinkLevel < this.player.minShrinkLevel) {
-            this.player.shrinkLevel = this.player.minShrinkLevel;
-        }
         
         // 縮小ペナルティ適用
         if (this.player.shrinkLevel === 1) {
@@ -516,6 +818,7 @@ class BattleSystem {
         }
 
         // HPが最大値を超えていたら調整（装備変更時など）
+        // [修正] HP全回復バグ防止: maxHpを超えた分だけカットし、回復はさせない
         if (this.player.hp > this.player.maxHp) this.player.hp = this.player.maxHp;
 
         // UI更新
@@ -556,7 +859,15 @@ class BattleSystem {
         
         this.mgmtUi.overlay.style.display = 'none';
         this.recalcStats(); // 構成変更を反映
-        this.showHome(); // Home画面更新
+        this.saveGame(); // 編成終了セーブ
+
+        // [修正] 戻り先の分岐
+        if (this.mode === 'rogue' && !this.isHome) {
+            // ダンジョン探索中の場合、ダンジョン選択肢を再描画
+            this.renderDungeonButtons();
+        } else {
+            this.showHome(); // Home画面更新
+        }
     }
 
     switchTab(tabName) {
@@ -624,6 +935,7 @@ class BattleSystem {
             this.recalcStats();
             this.renderEquipTab();
             this.showToast("装備を外しました");
+            this.saveGame(); // 装備解除セーブ
         }
     }
 
@@ -742,6 +1054,7 @@ class BattleSystem {
         this.updateMgmtBonusUI(); // ボーナス表示更新
         this.validateDeck(); // バリデーション更新
         this.renderDeckTab();
+        this.saveGame(); // デッキ変更セーブ
     }
 
     removeCardFromDeck(deckIndex) {
@@ -750,6 +1063,7 @@ class BattleSystem {
         this.renderDeckTab();
         this.updateMgmtBonusUI(); // ボーナス表示更新
         this.validateDeck(); // バリデーション更新
+        this.saveGame(); // デッキ変更セーブ
     }
 
     // --- 合成画面ロジック ---
@@ -913,6 +1227,7 @@ class BattleSystem {
         this.showToast(`合成成功！ ${newItem.name} を獲得！`, "success");
         
         this.renderSynthesisTab();
+        this.saveGame(); // 合成セーブ
     }
 
     executeCardSynthesis() {
@@ -947,6 +1262,7 @@ class BattleSystem {
         this.showToast(`合成成功！ ${newCard.name} を獲得！`, "success");
 
         this.renderSynthesisTab();
+        this.saveGame(); // 合成セーブ
     }
 
     performFixedSynthesis(resultId) {
@@ -964,6 +1280,7 @@ class BattleSystem {
         this.showToast(msg, "success");
         this.showToast(`合成大成功！ ${newCard.name} を獲得！`, "success");
         this.renderSynthesisTab();
+        this.saveGame(); // 合成セーブ
     }
 
     generateSynthesizedItem(level, basePlus) {
@@ -1122,6 +1439,7 @@ class BattleSystem {
 
         this.planEnemyTurn(); // 初手敵の行動決定
         this.startPlayerTurn();
+        this.saveGame(); // 階層移動セーブ
     }
 
     // 敵のルーチン適用ロジック
@@ -1290,7 +1608,17 @@ class BattleSystem {
         this.log("宝箱を発見した！");
         
         const loot = CARD_DATABASE[Math.floor(Math.random() * CARD_DATABASE.length)];
-        this.tempInventory.push(loot);
+        
+        // [修正] ローグライクモードなら即時入手
+        if (this.mode === 'rogue') {
+            if (loot.cost !== undefined) {
+                this.cardPool.push(loot);
+            } else {
+                this.permInventory.push(loot);
+            }
+        } else {
+            this.tempInventory.push(loot);
+        }
         
         // 戦闘コマンドを隠してシステムコマンドを表示
         this.ui.battleCommands.style.display = 'none';
@@ -1302,6 +1630,11 @@ class BattleSystem {
     // 帰還処理（生還）
     returnHome() {
         this.returnState = 'victory';
+
+        // ローグライクモード終了処理
+        if (this.mode === 'rogue') {
+            this.endRogueMode();
+        }
 
         // [Event] 露出覚醒イベント判定 (優先度高)
         if (this.checkExposureEvent()) {
@@ -1447,6 +1780,11 @@ class BattleSystem {
     processDefeat() {
         this.cleanupBattle(); // デッキ等のリセット
         this.tempInventory = []; // 全ロスト
+
+        // ローグライクモード終了処理 (敗北時も復元)
+        if (this.mode === 'rogue') {
+            this.endRogueMode();
+        }
         
         this.ui.battleCommands.style.display = 'none'; // 戦闘ボタンを隠す
         this.menuUi.overlay.style.display = 'flex';
@@ -1698,7 +2036,7 @@ class BattleSystem {
         this.player.isDefending = false; // 防御解除
         
         // 手札補充
-        let handLimit = 5; // デフォルト5枚
+        let handLimit = 4; // デフォルト4枚
         // 装備パッシブによる手札上限補正
         Object.values(this.equipment).forEach(item => {
             if (item && item.passive) {
@@ -2290,6 +2628,7 @@ class BattleSystem {
 
         this.isPlayerTurn = false;
         this.processEnemyTurn();
+        this.saveGame(); // ターン終了セーブ
     }
 
     // --- 敵のターン処理 ---
@@ -2423,7 +2762,23 @@ class BattleSystem {
         
         // ドロップ生成
         const loot = this.generateLoot();
-        this.tempInventory.push(loot);
+
+        // [修正] ローグライクモードなら即時入手
+        if (this.mode === 'rogue') {
+            if (loot.cost !== undefined) {
+                this.cardPool.push(loot); // カードの場合
+            } else {
+                this.permInventory.push(loot); // 装備の場合
+            }
+        } else {
+            this.tempInventory.push(loot);
+        }
+
+        // [専用ルールB] ボス撃破ボーナス
+        if (this.enemy.isBoss && this.mode === 'rogue') {
+            this.restCount++;
+            this.showToast("ボス撃破ボーナス！ 休憩回数が増えました！", "success");
+        }
         
         this.showWinMenu(true, loot);
     }
@@ -2436,6 +2791,12 @@ class BattleSystem {
         if (rand < 0.4) type = 'weapon';
         else if (rand < 0.8) type = 'armor';
         else type = 'accessory';
+
+        // [調整] ローグライクモードかつ浅層(30階未満)では「小人の留め針」を出さない
+        // generateLoot内でアイテムIDを直接指定して生成するわけではないが、
+        // accessory生成時にフィルタリングが必要。
+        // 現在のロジックでは ACCESSORY_EFFECTS からランダムに選んでいるため、
+        // 候補リストを作成する段階でフィルタリングを行う。
 
         let item = { type: type, level: this.depth };
 
@@ -2456,8 +2817,10 @@ class BattleSystem {
         if (type === 'weapon') {
             // 武器種別をランダム選択
             const wKeys = Object.keys(WEAPON_TYPES);
-            const wType = WEAPON_TYPES[wKeys[Math.floor(Math.random() * wKeys.length)]];
+            const wKey = wKeys[Math.floor(Math.random() * wKeys.length)];
+            const wType = WEAPON_TYPES[wKey];
             
+            item.id = `gen_weapon_${tierIndex}_${wKey}`; // ID付与
             item.name = `${tier.name}${wType.name}`;
             item.atk = 0; item.int = 0; item.def = 0; item.hp = 0; item.spd = 0;
 
@@ -2479,8 +2842,10 @@ class BattleSystem {
         else if (type === 'armor') {
             // 防具種別をランダム選択
             const aKeys = Object.keys(ARMOR_TYPES);
-            const aType = ARMOR_TYPES[aKeys[Math.floor(Math.random() * aKeys.length)]];
+            const aKey = aKeys[Math.floor(Math.random() * aKeys.length)];
+            const aType = ARMOR_TYPES[aKey];
 
+            item.id = `gen_armor_${tierIndex}_${aKey}`; // ID付与
             item.name = `${tier.name}${aType.name}`;
             item.atk = 0; item.int = 0; item.def = 0; item.hp = 0; item.spd = 0;
 
@@ -2497,7 +2862,15 @@ class BattleSystem {
         } 
         else if (type === 'accessory') {
             // ランダムでパッシブ効果を選択
-            const effect = ACCESSORY_EFFECTS[randomInt(0, ACCESSORY_EFFECTS.length - 1)];
+            let candidates = ACCESSORY_EFFECTS;
+            
+            // [調整] ドロップ制限
+            if (this.mode === 'rogue' && this.depth < 30) {
+                candidates = candidates.filter(e => !e.id.startsWith('pin_small'));
+            }
+
+            const effect = candidates[randomInt(0, candidates.length - 1)];
+            item.id = effect.id; // アクセサリーは効果IDを使用
             item.name = effect.name;
             item.passive = effect;
             item.atk = 0;
@@ -2508,7 +2881,18 @@ class BattleSystem {
         }
 
         // 強化値 (+X) システム
-        const plusVal = Math.floor(this.depth / 3);
+        let plusVal = 0;
+        if (this.mode === 'rogue') {
+            // [専用ルールC] ローグライクモードの計算式
+            const base = Math.floor(this.depth / 10);
+            const variance = Math.floor(Math.random() * 7) - 3; // -3 ~ +3
+            plusVal = base + variance;
+            if (plusVal < 0) plusVal = 0;
+        } else {
+            // 通常モード
+            plusVal = Math.floor(this.depth / 3);
+        }
+
         if (plusVal > 0 && type !== 'accessory') {
             item.name += `(+${plusVal})`;
             item.plusValue = plusVal;
@@ -2522,6 +2906,13 @@ class BattleSystem {
                 if (item.int > 0) item.int += plusVal;
                 if (item.spd > 0) item.spd += plusVal;
             }
+        }
+
+        // 安全策: IDが設定されなかった場合のフォールバック
+        if (!item.id) {
+            console.error("生成されたアイテムにIDがありません！", item);
+            // 緊急回避: ランダムなユニークIDを付与
+            item.id = `fallback_${type}_${Date.now()}`;
         }
 
         return item;
@@ -2601,7 +2992,22 @@ class BattleSystem {
         // ボタン生成（右下エリア用）
         const buttons = [
             { text: "さらに奥へ進む", onClick: () => this.goNextFloor() },
-            { text: "街へ帰還する", onClick: () => this.returnHome() }
+            { 
+                text: this.mode === 'rogue' ? "リタイア (記録終了)" : "街へ帰還する", 
+                onClick: () => {
+                    console.log("帰還ボタンが押されました。");
+                    if (this.mode === 'rogue') {
+                        if (!confirm("リタイアしますか？ (アイテムは持ち帰れません)")) return;
+                        // endRogueModeはreturnHome内で呼ばれるが、
+                        // ここで明示的に呼ぶか、returnHomeに任せるか。
+                        // 既存実装ではreturnHome内でendRogueModeを呼んでいるため、
+                        // そのままreturnHomeを呼ぶ。
+                        this.returnHome();
+                    } else {
+                        this.returnHome();
+                    }
+                }
+            }
         ];
 
         // 休憩ボタン追加
@@ -2613,6 +3019,12 @@ class BattleSystem {
             onClick: () => this.processRest(),
             disabled: isHpFull || isRestEmpty
         });
+
+        // [専用ルールA] ダンジョン内編成 (Rogue Mode)
+        // 休憩画面（ダンジョン進行選択画面）でも編成可能に
+        if (this.mode === 'rogue') {
+            buttons.push({ text: "編成", onClick: () => this.openManagement() });
+        }
 
         this.ui.systemCommands.innerHTML = ''; // クリアして再描画
         // 階層情報テキスト再追加
