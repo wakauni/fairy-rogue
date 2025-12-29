@@ -23,6 +23,13 @@ body {
     font-family: "Helvetica Neue", Arial, sans-serif;
     touch-action: manipulation; /* ダブルタップ拡大防止 */
     color: var(--text-color);
+    /* タップ時の青い枠を消す */
+    -webkit-tap-highlight-color: transparent;
+    /* 長押しで文字選択されないようにする */
+    user-select: none;
+    -webkit-user-select: none;
+    /* スマホでのスクロール操作感を調整 */
+    touch-action: manipulation;
 }
 
 #game-container {
