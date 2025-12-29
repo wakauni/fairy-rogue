@@ -1,0 +1,151 @@
+<!DOCTYPE html>
+<html lang="ja">
+<head>
+    <meta charset="UTF-8">
+    <meta name="viewport" content="width=device-width, initial-scale=1.0, maximum-scale=1.0, user-scalable=no">
+    <title>Fairy Explorer - Prototype</title>
+    <link rel="stylesheet" href="css/style.css">
+</head>
+<body>
+    <!-- トースト通知用スタイル -->
+    <style>
+        #toast-container {
+            position: fixed;
+            top: 15%;
+            left: 50%;
+            transform: translateX(-50%);
+            z-index: 9999;
+            display: flex;
+            flex-direction: column;
+            align-items: center;
+            gap: 8px;
+            pointer-events: none;
+            width: 90%;
+            max-width: 400px;
+        }
+        .toast-msg {
+            background: rgba(0, 0, 0, 0.85);
+            color: #fff;
+            padding: 8px 16px;
+            border-radius: 4px;
+            font-size: 14px;
+            font-weight: bold;
+            animation: toastFade 3s forwards;
+            box-shadow: 0 2px 5px rgba(0,0,0,0.5);
+            white-space: normal !important;
+            word-wrap: break-word;
+            overflow-wrap: break-word;
+            width: auto;
+            max-width: 100%;
+            box-sizing: border-box;
+            text-align: center;
+            line-height: 1.4;
+        }
+        .toast-warning { color: #e74c3c; border-left: 4px solid #e74c3c; }
+        .toast-success { color: #2ecc71; border-left: 4px solid #2ecc71; }
+        
+        @keyframes toastFade {
+            0% { opacity: 0; transform: translateY(-10px); }
+            10% { opacity: 1; transform: translateY(0); }
+            80% { opacity: 1; }
+            100% { opacity: 0; pointer-events: none; }
+        }
+    </style>
+
+<div id="game-container">
+    <div id="toast-container"></div>
+    <div id="speech-bubble" class="speech-bubble"></div>
+
+    <div id="header-area">
+        <div class="status-box">
+            <span>HP: <span id="hp-val">100</span> / <span id="max-hp-val">100</span></span>
+            <div class="hp-bar-container">
+                <div id="hp-bar" class="hp-bar-fill"></div>
+            </div>
+            <div style="font-size: 12px; margin-top: 4px;">
+                ATK:<span id="stat-atk">10</span>
+                DEF:<span id="stat-def">5</span>
+                INT:<span id="stat-int">15</span>
+                SPD:<span id="stat-spd">12</span>
+            </div>
+        </div>
+        <div class="status-box" style="text-align: right;">
+            <span>Deck: <span id="deck-count">0</span></span>
+            <span>Discard: <span id="discard-count">0</span></span>
+        </div>
+    </div>
+
+    <div id="main-view">
+        <!-- ゲーム進行用オーバーレイ (Home, Result, Gameover) -->
+        <div id="game-menu-overlay" style="display: none;">
+            <div id="menu-title" class="menu-title">HOME</div>
+            <div id="menu-content" class="menu-text"></div>
+            <div id="loot-display" class="loot-list" style="display:none;"></div>
+            <div id="menu-buttons" class="menu-btn-group">
+                <!-- JSでボタン生成 -->
+            </div>
+        </div>
+
+        <!-- 編成画面オーバーレイ -->
+        <div id="management-overlay" style="display: none;">
+            <div class="mgmt-header">
+                <button id="tab-equip" class="mgmt-tab active" onclick="game.switchTab('equip')">装備</button>
+                <button id="tab-deck" class="mgmt-tab" onclick="game.switchTab('deck')">デッキ</button>
+            </div>
+            <div id="mgmt-bonus-indicator" style="background-color: #34495e; color: #ecf0f1; padding: 5px 10px; font-size: 12px; border-bottom: 1px solid #7f8c8d; display: flex; gap: 15px; justify-content: center;">
+                <span id="mgmt-bonus-unique" style="opacity: 0.3; transition: 0.3s;">★ Technician (INT+5)</span>
+                <span id="mgmt-bonus-heavy" style="opacity: 0.3; transition: 0.3s;">★ Heavy (DEF+4)</span>
+            </div>
+            <div id="mgmt-content" class="mgmt-content">
+                <!-- JSで動的に生成 -->
+            </div>
+            <div class="mgmt-footer">
+                <div id="mgmt-error-msg" style="font-size: 12px; margin-right: 10px; text-align: right; font-weight: bold;"></div>
+                <button id="mgmt-save-btn" class="btn" onclick="game.closeManagement()">戻る (保存)</button>
+            </div>
+        </div>
+
+        <div id="enemy-intent">
+            <span id="intent-icon">⚔️</span>
+            <span id="intent-text">攻撃の予感...</span>
+        </div>
+        <div id="enemy-graphic">BOSS</div>
+        <div id="battle-log">
+            <div class="log-entry">ダンジョン深部に到達した！</div>
+            <div class="log-entry">強敵が現れた！</div>
+        </div>
+    </div>
+
+    <div id="bottom-area">
+        <div id="player-area">
+            <img id="player-img" src="Fairy_face1.png" alt="Fairy">
+        </div>
+
+        <div id="command-area">
+            <div id="battle-commands">
+                <button class="btn btn-attack" onclick="game.playerAction('attack')">⚔️ 攻撃</button>
+                <button class="btn btn-defend" onclick="game.playerAction('defend')">🛡️ 防御</button>
+                <button class="btn btn-magic" onclick="game.toggleMagicMenu(true)">✨ 魔法 (カード)</button>
+                <button class="btn btn-run" onclick="game.playerAction('run')">💨 逃走</button>
+
+                <div id="card-selection-overlay">
+                    <div style="font-weight:bold; margin-bottom:5px;">手札を選択:</div>
+                    <div id="card-list" class="card-list">
+                        </div>
+                    <button class="btn close-btn" onclick="game.toggleMagicMenu(false)">戻る</button>
+                </div>
+            </div>
+            <div id="system-commands" style="display: none;"></div>
+        </div>
+    </div>
+</div>
+
+<!-- スクリプトの読み込み順序が重要です -->
+<script src="js/utils.js"></script>
+<script src="js/data.js"></script>
+<script src="js/Unit.js"></script>
+<script src="js/DeckManager.js"></script>
+<script src="js/BattleSystem.js"></script>
+<script src="js/main.js"></script>
+</body>
+</html>

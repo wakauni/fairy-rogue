@@ -1,0 +1,541 @@
+/* =========================================
+   CSSスタイル定義
+   ========================================= */
+:root {
+    --primary-color: #4a90e2;
+    --accent-color: #f5a623;
+    --danger-color: #e74c3c;
+    --bg-color: #2c3e50;
+    --panel-bg: rgba(255, 255, 255, 0.95);
+    --text-color: #333;
+}
+
+body {
+    margin: 0;
+    padding: 0;
+    overflow: hidden; /* スクロール禁止 */
+    display: flex;
+    flex-direction: column;
+    justify-content: center;
+    align-items: center;
+    height: 100vh;
+    background-color: var(--bg-color);
+    font-family: "Helvetica Neue", Arial, sans-serif;
+    touch-action: manipulation; /* ダブルタップ拡大防止 */
+    color: var(--text-color);
+}
+
+#game-container {
+    width: 100%;
+    max-width: 600px;
+    height: 100%;
+    display: flex;
+    flex-direction: column;
+    background-image: linear-gradient(to bottom, #203a43, #2c5364); /* ダンジョン風背景 */
+    position: relative;
+}
+
+/* --- 1. Header Area (最上部) --- */
+#header-area {
+    flex: 0 0 10%;
+    padding: 10px;
+    background-color: rgba(0, 0, 0, 0.5);
+    color: white;
+    display: flex;
+    justify-content: space-between;
+    align-items: center;
+    font-size: 14px;
+    box-sizing: border-box;
+}
+
+.status-box {
+    display: flex;
+    flex-direction: column;
+}
+
+.hp-bar-container {
+    width: 120px;
+    height: 10px;
+    background-color: #555;
+    border-radius: 5px;
+    margin-top: 4px;
+    overflow: hidden;
+}
+
+.hp-bar-fill {
+    height: 100%;
+    background-color: #2ecc71;
+    width: 100%;
+    transition: width 0.3s ease;
+}
+
+/* --- 2. Main View (敵・ログ・Intent) --- */
+#main-view {
+    flex: 1; /* 残りの高さを埋める */
+    position: relative;
+    display: flex;
+    flex-direction: column;
+    justify-content: center;
+    align-items: center;
+}
+
+/* 敵の予兆表示 */
+#enemy-intent {
+    background-color: rgba(255, 255, 255, 0.8);
+    padding: 5px 10px;
+    border-radius: 15px;
+    margin-bottom: 10px;
+    font-weight: bold;
+    font-size: 14px;
+    display: flex;
+    align-items: center;
+    gap: 5px;
+    border: 2px solid var(--danger-color);
+}
+
+/* 敵グラフィック（CSSで描画） */
+#enemy-graphic {
+    width: 120px;
+    height: 120px;
+    background-color: #8e44ad;
+    border-radius: 10px;
+    box-shadow: 0 0 20px rgba(0,0,0,0.5);
+    display: flex;
+    justify-content: center;
+    align-items: center;
+    color: white;
+    font-size: 24px;
+    position: relative;
+    transition: transform 0.1s;
+}
+/* 敵の目（装飾） */
+#enemy-graphic::before, #enemy-graphic::after {
+    content: '';
+    position: absolute;
+    width: 20px;
+    height: 20px;
+    background: yellow;
+    border-radius: 50%;
+    top: 40px;
+}
+#enemy-graphic::before { left: 30px; }
+#enemy-graphic::after { right: 30px; }
+
+/* バトルログ */
+#battle-log {
+    position: absolute;
+    bottom: 10px;
+    width: 90%;
+    height: 60px;
+    background-color: rgba(0, 0, 0, 0.6);
+    border-radius: 5px;
+    color: #fff;
+    padding: 5px;
+    font-size: 12px;
+    overflow: hidden;
+    display: flex;
+    flex-direction: column;
+    justify-content: flex-end;
+    pointer-events: none;
+}
+.log-entry { 
+    margin-bottom: 2px;
+    animation: fadeInLog 0.3s ease-out forwards;
+}
+
+@keyframes fadeInLog {
+    from { opacity: 0; transform: translateY(5px); }
+    to   { opacity: 1; transform: translateY(0); }
+}
+
+/* --- 下半分エリア（プレイヤー＆コマンド） --- */
+#bottom-area {
+    flex: 0 0 45%; /* 全体の45% */
+    display: flex;
+    background-color: var(--panel-bg);
+    border-top: 4px solid #333;
+}
+
+/* --- 3. Player Area (左下) --- */
+#player-area {
+    /* 1. 配置のリセット */
+    position: relative !important;
+    top: auto !important;
+    left: auto !important;
+    height: auto !important;
+
+    /* 2. 幅の修正（ここが重要） */
+    flex: 0 0 35% !important;
+    width: 35% !important;
+    max-width: 35% !important;
+    min-width: 0 !important;
+
+    /* 3. その他のスタイル */
+    overflow: hidden !important;
+    z-index: 1;
+
+    border-right: 2px solid #ccc;
+    display: flex;
+    flex-direction: column;
+    justify-content: center;
+    align-items: center;
+    padding: 0;
+    box-sizing: border-box;
+    user-select: none;
+    cursor: default;
+    pointer-events: none;
+}
+
+/* プレイヤー立ち絵 */
+#player-img {
+    position: absolute;
+    bottom: 0;
+    left: 50%;
+    transform: translateX(-50%);
+    width: auto;
+    height: 100%;
+    object-fit: contain;
+    object-position: bottom center;
+    z-index: 10;
+    pointer-events: none;
+    filter: drop-shadow(0 0 5px rgba(255, 255, 255, 0.8));
+    transition: transform 0.5s cubic-bezier(0.175, 0.885, 0.32, 1.275);
+}
+
+/* クリック時のへこみ演出 */
+#player-area.interactive:active {
+    transform: scale(0.98);
+}
+
+/* 拠点でのみクリック可能にするクラス */
+#player-area.interactive {
+    cursor: pointer;
+    pointer-events: auto;
+    transition: transform 0.1s;
+}
+
+/* 立ち絵アニメーション (Speak Bounce) */
+.anim-speak {
+    animation: fairyBounce 0.2s ease-in-out 2;
+    transform-origin: bottom center;
+}
+
+@keyframes fairyBounce {
+    0% { transform: translateX(-50%) translateY(0) scale(1); }
+    50% { transform: translateX(-50%) translateY(-6px) scale(1.02); }
+    100% { transform: translateX(-50%) translateY(0) scale(1); }
+}
+
+/* --- 吹き出し (Speech Bubble) --- */
+.speech-bubble {
+    position: fixed !important;
+    z-index: 10000;
+    bottom: 46%;
+    left: 8%;
+    width: auto;
+    max-width: 45%;
+    min-width: 200px;
+    padding: 14px 18px;
+    
+    background-color: #ffffff;
+    border: 2px solid #333333;
+    border-radius: 12px;
+    color: #333333;
+    font-size: 14px;
+    box-shadow: 0 4px 6px rgba(0,0,0,0.1);
+    
+    opacity: 0;
+    transition: opacity 0.3s, transform 0.3s;
+    pointer-events: none;
+    
+    white-space: normal;
+    word-wrap: break-word;
+    overflow-wrap: break-word;
+}
+
+.speech-bubble::after {
+    content: '';
+    position: absolute;
+    top: 100%;
+    left: 20px;
+    border-width: 12px;
+    border-style: solid;
+    border-color: #ffffff transparent transparent transparent;
+}
+
+.speech-bubble.visible {
+    opacity: 1;
+    transform: translateY(-10px);
+}
+
+/* --- ゲームメニュー・オーバーレイ (Home / Result) --- */
+#game-menu-overlay {
+    position: absolute;
+    top: 0; left: 0; width: 100%; height: 100%;
+    background-color: rgba(44, 62, 80, 0.95);
+    z-index: 100;
+    display: flex; /* JSで制御 */
+    flex-direction: column;
+    justify-content: center;
+    align-items: center;
+    color: white;
+    text-align: center;
+    padding: 20px;
+    box-sizing: border-box;
+}
+
+.menu-title { font-size: 24px; margin-bottom: 20px; font-weight: bold; color: var(--accent-color); }
+.menu-text { margin-bottom: 20px; line-height: 1.6; }
+.menu-btn-group { display: flex; gap: 10px; flex-wrap: wrap; justify-content: center; }
+
+.loot-list {
+    width: 100%;
+    max-height: 150px;
+    overflow-y: auto;
+    background: rgba(0,0,0,0.3);
+    border: 1px solid #555;
+    margin-bottom: 20px;
+    padding: 10px;
+    text-align: left;
+}
+.loot-item { font-size: 14px; color: #f1c40f; margin-bottom: 4px; border-bottom: 1px dashed #555; padding-bottom: 2px;}
+
+/* --- 編成画面 (Management) --- */
+#management-overlay {
+    position: absolute;
+    top: 0; left: 0; width: 100%; height: 100%;
+    background-color: #2c3e50;
+    z-index: 110;
+    display: flex;
+    flex-direction: column;
+    color: white;
+}
+
+.mgmt-header {
+    flex: 0 0 50px;
+    display: flex;
+    background-color: #34495e;
+}
+
+.mgmt-tab {
+    flex: 1;
+    background: none;
+    border: none;
+    color: #95a5a6;
+    font-size: 16px;
+    font-weight: bold;
+    cursor: pointer;
+    border-bottom: 4px solid transparent;
+}
+.mgmt-tab.active {
+    color: white;
+    border-bottom-color: var(--accent-color);
+    background-color: #2c3e50;
+}
+
+.mgmt-content {
+    flex: 1;
+    padding: 10px;
+    overflow-y: auto;
+    display: flex;
+    gap: 10px;
+}
+
+.mgmt-footer {
+    flex: 0 0 60px;
+    display: flex;
+    justify-content: center;
+    align-items: center;
+    background-color: #34495e;
+}
+
+/* 2カラムレイアウト */
+.mgmt-col {
+    flex: 1;
+    display: flex;
+    flex-direction: column;
+    border: 1px solid #555;
+    padding: 5px;
+    background: rgba(0,0,0,0.2);
+    overflow-y: auto;
+}
+.mgmt-col h3 { margin: 0 0 10px 0; font-size: 16px; color: var(--accent-color); border-bottom: 1px solid #555; }
+
+.equip-slot {
+    border: 1px solid #7f8c8d;
+    padding: 10px;
+    margin-bottom: 10px;
+    background: rgba(255,255,255,0.05);
+}
+.equip-slot label { display: block; font-size: 12px; color: #bdc3c7; }
+.equip-slot div { font-weight: bold; }
+
+.list-item {
+    padding: 8px;
+    border-bottom: 1px solid #555;
+    cursor: pointer;
+    font-size: 13px;
+}
+.list-item:hover { background-color: rgba(255,255,255,0.1); }
+.list-item small { color: #bdc3c7; display: block; }
+
+/* --- 4. Command Area (右下) --- */
+#command-area {
+    flex: 1 !important;
+    padding: 10px;
+    display: flex;
+    flex-direction: column;
+    gap: 8px;
+    box-sizing: border-box;
+    position: relative;
+    z-index: 20;
+    /* 右パネルの重なり順を保証 */
+    background-color: var(--panel-bg);
+}
+
+/* 戦闘コマンドコンテナ */
+#battle-commands {
+    display: flex;
+    flex-direction: column;
+    gap: 8px;
+    width: 100%;
+    height: 100%;
+    position: relative;
+}
+
+/* システムコマンドコンテナ（勝利時など） */
+#system-commands {
+    display: flex;
+    flex-direction: column;
+    gap: 10px;
+    width: 100%;
+    height: 100%;
+    justify-content: center;
+}
+
+/* ボタン共通スタイル */
+.btn {
+    background-color: white;
+    border: 2px solid #ccc;
+    border-radius: 8px;
+    padding: 12px;
+    font-size: 16px;
+    font-weight: bold;
+    cursor: pointer;
+    text-align: center;
+    user-select: none;
+    transition: background 0.1s;
+}
+.btn:active { background-color: #ddd; }
+
+.btn-attack { border-color: var(--danger-color); color: var(--danger-color); }
+.btn-defend { border-color: var(--primary-color); color: var(--primary-color); }
+.btn-magic { border-color: #9b59b6; color: #9b59b6; background-color: #fcf0ff; }
+.btn-run { border-color: #7f8c8d; color: #7f8c8d; font-size: 14px; padding: 8px;}
+
+/* カード選択オーバーレイ */
+#card-selection-overlay {
+    position: absolute;
+    top: 0; left: 0; width: 100%; height: 100%;
+    background-color: rgba(255,255,255,0.98);
+    display: none; /* 初期は非表示 */
+    flex-direction: column;
+    padding: 10px;
+    box-sizing: border-box;
+    z-index: 10;
+}
+
+.card-list {
+    flex: 1;
+    display: flex;
+    flex-direction: column;
+    gap: 5px;
+    overflow-y: auto;
+}
+
+.card-item {
+    border: 1px solid #9b59b6;
+    border-radius: 5px;
+    padding: 8px;
+    background-color: #fff;
+    display: flex;
+    justify-content: space-between;
+    align-items: center;
+    font-size: 13px;
+    cursor: pointer;
+}
+.card-item:hover { background-color: #f0f0f0; }
+
+.close-btn {
+    margin-top: 5px;
+    background-color: #7f8c8d;
+    color: white;
+    border: none;
+}
+
+/* アニメーション用クラス */
+.shake { animation: shake 0.5s; }
+@keyframes shake {
+    0% { transform: translate(1px, 1px) rotate(0deg); }
+    10% { transform: translate(-1px, -2px) rotate(-1deg); }
+    20% { transform: translate(-3px, 0px) rotate(1deg); }
+    30% { transform: translate(3px, 2px) rotate(0deg); }
+    40% { transform: translate(1px, -1px) rotate(1deg); }
+    50% { transform: translate(-1px, 2px) rotate(-1deg); }
+    60% { transform: translate(-3px, 1px) rotate(0deg); }
+    70% { transform: translate(3px, 1px) rotate(-1deg); }
+    80% { transform: translate(-1px, -1px) rotate(1deg); }
+    90% { transform: translate(1px, 2px) rotate(0deg); }
+    100% { transform: translate(1px, -2px) rotate(-1deg); }
+}
+
+/* --- Synthesis View (Full Panel) --- */
+.synthesis-view-container {
+    position: fixed !important;
+    top: 0;
+    left: 0;
+    width: 100vw !important;
+    height: 100vh !important;
+    background-color: rgba(44, 62, 80, 0.95);
+    z-index: 999999 !important;
+    display: flex;
+    flex-direction: column;
+    padding: 20px;
+    box-sizing: border-box;
+}
+
+.synthesis-item-list {
+    flex: 1;
+    overflow-y: auto;
+    display: grid;
+    grid-template-columns: repeat(auto-fill, minmax(80px, 1fr));
+    grid-auto-rows: 90px;
+    gap: 8px;
+    padding: 5px;
+    margin-bottom: 10px;
+    background-color: rgba(0, 0, 0, 0.2);
+    border: 1px solid #444;
+}
+
+.synthesis-item-card {
+    background: #34495e;
+    border: 1px solid #7f8c8d;
+    border-radius: 4px;
+    padding: 8px;
+    font-size: 11px;
+    text-align: center;
+    cursor: pointer;
+    transition: all 0.2s;
+    display: flex;
+    flex-direction: column;
+    justify-content: center;
+    align-items: center;
+    height: 80px;
+}
+
+.synthesis-item-card.selected {
+    border-color: #f1c40f;
+    background-color: #f39c12;
+    color: #fff;
+    transform: scale(0.95);
+}
