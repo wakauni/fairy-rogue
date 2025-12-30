@@ -46,9 +46,16 @@ class BattleSystem {
         this.permInventory = []; // 持ち帰り確定アイテム（未装備）
         
         // データ管理
+        // ▼ 追加: コレクションデータの初期化
+        this.collection = {
+            accessories: [],   // 取得済みの装飾品IDリスト
+            magicCircles: [],  // 取得済みの魔法陣IDリスト
+            statuses: []       // かかったことのある状態異常IDリスト
+        };
+
         this.masterDeck = []; // 現在のデッキ構成
         this.cardPool = [];   // 所持しているがデッキに入っていないカード
-        this.equipment = { weapon: null, armor: null, accessory: null }; // 装備スロット
+        this.equipment = { weapon: null, armor: null, accessory: null, magic_circle: null }; // 装備スロット
 
         // 妖精の独り言システム用
         this.messageTimer = null;
@@ -58,6 +65,11 @@ class BattleSystem {
         this.lastActionTime = Date.now();
         this.restCount = 3; // 休憩回数
         this.clickStreak = 0; // 連打カウンター
+
+        // ▼ 追加: ログ管理用変数
+        this.logQueue = [];         // ログの待ち行列
+        this.isProcessingLog = false; // 現在ログを出力中かどうかのフラグ
+
 
         // AFK監視
         ['mousemove', 'click', 'keydown', 'touchstart'].forEach(evt => {
@@ -157,6 +169,9 @@ class BattleSystem {
 
         if (!this.player) return;
 
+        // ▼ 追加: 保存前に現在の所持品を図鑑登録
+        this.registerCurrentItems();
+
         const saveData = {
             player: {
                 hp: this.player.hp,
@@ -189,7 +204,8 @@ class BattleSystem {
                 turn: this.turn,
                 tempInventory: this.tempInventory,
                 state: this.isHome ? 'home' : (this.enemy ? 'battle' : 'exploration'),
-                rogueHighScore: this.rogueHighScore
+                rogueHighScore: this.rogueHighScore,
+                collection: this.collection // ▼ 追加
             },
             
             battle: null
@@ -320,11 +336,12 @@ class BattleSystem {
 
             this.permInventory = (data.inventory || []).map(restoreItem).filter(i => i !== null);
             
-            this.equipment = { weapon: null, armor: null, accessory: null };
+            this.equipment = { weapon: null, armor: null, accessory: null, magic_circle: null };
             if (data.equipment) {
                 if (data.equipment.weapon) this.equipment.weapon = restoreItem(data.equipment.weapon);
                 if (data.equipment.armor) this.equipment.armor = restoreItem(data.equipment.armor);
                 if (data.equipment.accessory) this.equipment.accessory = restoreItem(data.equipment.accessory);
+                if (data.equipment.magic_circle) this.equipment.magic_circle = restoreItem(data.equipment.magic_circle);
             }
             
             // デッキ復元
@@ -340,6 +357,15 @@ class BattleSystem {
             this.turn = data.game.turn;
             this.tempInventory = data.game.tempInventory || [];
             this.rogueHighScore = data.game.rogueHighScore || 0;
+            
+            // ▼ 追加: コレクションの復元
+            if (data.game.collection) {
+                this.collection = data.game.collection;
+            }
+            
+            // 後方互換性: 現在の所持品・装備品を即座に図鑑登録する
+            this.registerCurrentItems();
+
             const state = data.game.state || (this.isHome ? 'home' : 'exploration');
 
             // 戦闘復元
@@ -388,6 +414,36 @@ class BattleSystem {
             console.error("Load failed", e);
             return false;
         }
+    }
+
+    // --- 冒険譚 (Adventure Log) 関連 ---
+
+    // 図鑑登録 (汎用)
+    registerCollection(type, id) {
+        if (!id) return;
+        if (!this.collection[type]) this.collection[type] = [];
+        
+        if (!this.collection[type].includes(id)) {
+            this.collection[type].push(id);
+        }
+    }
+
+    // 手持ちアイテムを登録
+    registerCurrentItems() {
+        // 装備中の装飾品・魔法陣
+        if (this.equipment.accessory) this.registerCollection('accessories', this.equipment.accessory.id);
+        if (this.equipment.magic_circle) this.registerCollection('magicCircles', this.equipment.magic_circle.id);
+        
+        // インベントリ(永続・一時)内の装飾品・魔法陣
+        const allItems = [...this.permInventory, ...this.tempInventory];
+        allItems.forEach(item => {
+            if (item.type === 'accessory' || (item.id && (item.id.startsWith('acc_') || item.id.startsWith('pin_')))) {
+                this.registerCollection('accessories', item.id);
+            }
+            if (item.type === 'magic_circle' || (item.id && item.id.startsWith('mc_'))) {
+                this.registerCollection('magicCircles', item.id);
+            }
+        });
     }
 
     // --- シーン管理 ---
@@ -470,12 +526,15 @@ class BattleSystem {
         actions.push({ text: "試練の洞窟へ", onClick: () => this.confirmStartRogueMode() });
 
         // 所持品または装備がある場合は最強装備ボタンを表示 (Shortcut)
-        if (this.permInventory.length > 0 || this.equipment.weapon || this.equipment.armor || this.equipment.accessory) {
+        if (this.permInventory.length > 0 || this.equipment.weapon || this.equipment.armor || this.equipment.accessory || this.equipment.magic_circle) {
             actions.push({ text: "最強装備", onClick: () => this.equipBestGear() });
         }
 
         // 編成ボタン
         actions.push({ text: "編成", onClick: () => this.openManagement() });
+
+        // 冒険譚ボタン
+        actions.push({ text: "冒険譚", onClick: () => this.showAdventureLog() });
 
         this.renderSystemButtons(actions);
 
@@ -485,12 +544,242 @@ class BattleSystem {
         this.saveGame(); // 拠点セーブ
     }
 
+    // 冒険譚画面の表示
+    showAdventureLog() {
+        // オーバーレイ作成
+        const overlay = document.createElement('div');
+        overlay.className = 'synthesis-view-container'; // 既存の全画面クラスを流用
+        overlay.style.zIndex = "10000";
+
+        // HTML構築
+        overlay.innerHTML = `
+            <div style="display:flex; justify-content:space-between; align-items:center; margin-bottom:15px; border-bottom:1px solid #fff; padding-bottom:10px;">
+                <h2 style="margin:0; color:#fff;">冒険譚 (Adventure Log)</h2>
+                <button class="btn close-btn" onclick="this.closest('.synthesis-view-container').remove()">閉じる</button>
+            </div>
+            
+            <div style="display:flex; gap:10px; margin-bottom:15px;">
+                <button class="btn" onclick="game.renderLogTab('accessory', this)">装飾品</button>
+                <button class="btn" onclick="game.renderLogTab('magic_circle', this)">魔法陣</button>
+                <button class="btn" onclick="game.renderLogTab('status', this)">状態異常</button>
+            </div>
+
+            <div id="log-content-area" style="flex:1; overflow-y:auto; background:rgba(0,0,0,0.3); padding:10px; border-radius:4px;">
+                <div style="color:#aaa; text-align:center; margin-top:50px;">カテゴリを選択してください</div>
+            </div>
+        `;
+
+        document.body.appendChild(overlay);
+        
+        // デフォルトで装飾品タブを開く
+        setTimeout(() => this.renderLogTab('accessory', overlay.querySelectorAll('.btn')[1]), 0);
+    }
+
+    // タブ描画
+    renderLogTab(category, btnElement) {
+        const area = document.getElementById('log-content-area');
+        if (!area) return;
+
+        // ボタンのアクティブ化演出
+        const btns = btnElement.parentNode.querySelectorAll('.btn');
+        btns.forEach(b => b.style.filter = 'brightness(1.0)');
+        btnElement.style.filter = 'brightness(1.3) drop-shadow(0 0 5px #fff)';
+
+        area.innerHTML = '';
+
+        let listHtml = '';
+        
+        // A. 装飾品タブ
+        if (category === 'accessory') {
+            // 1. 通常のアクセサリー (ACCESSORY_EFFECTS)
+            ACCESSORY_EFFECTS.forEach(item => {
+                const isUnlocked = this.collection.accessories.includes(item.id);
+                listHtml += this.createLogItemHtml(item.name, item.desc, isUnlocked, "💍");
+            });
+
+            // 2. 解放の証 (ACCESSORY_PROOF_OF_LIBERATION)
+            if (typeof ACCESSORY_PROOF_OF_LIBERATION !== 'undefined') {
+                const item = ACCESSORY_PROOF_OF_LIBERATION;
+                const isUnlocked = this.collection.accessories.includes(item.id);
+                listHtml += this.createLogItemHtml(item.name, item.desc, isUnlocked, "👑");
+            }
+
+            // 3. エンドコンテンツ装備 (ENDGAME_ITEMS)
+            if (typeof ENDGAME_ITEMS !== 'undefined') {
+                ENDGAME_ITEMS.forEach(item => {
+                    if (item.type === 'accessory') {
+                        const isUnlocked = this.collection.accessories.includes(item.id);
+                        listHtml += this.createLogItemHtml(item.name, item.desc, isUnlocked, "👑");
+                    }
+                });
+            }
+        }
+        // B. 魔法陣タブ
+        else if (category === 'magic_circle') {
+            if (typeof MAGIC_CIRCLE_DATABASE !== 'undefined') {
+                MAGIC_CIRCLE_DATABASE.forEach(item => {
+                    const isUnlocked = this.collection.magicCircles.includes(item.id);
+                    listHtml += this.createLogItemHtml(item.name, item.desc, isUnlocked, "🔯");
+                });
+            }
+        }
+        // C. 状態異常タブ
+        else if (category === 'status') {
+            Object.values(STATUS_TYPES).forEach(status => {
+                const isUnlocked = this.collection.statuses.includes(status.id);
+                listHtml += this.createLogItemHtml(status.name, status.desc || "詳細不明", isUnlocked, "💀");
+            });
+        }
+
+        area.innerHTML = listHtml;
+    }
+
+    // HTML生成ヘルパー
+    createLogItemHtml(name, desc, isUnlocked, icon) {
+        const color = isUnlocked ? '#fff' : '#777';
+        const bg = isUnlocked ? 'rgba(255,255,255,0.1)' : 'rgba(0,0,0,0.2)';
+        const nameText = isUnlocked ? name : '？？？？？';
+        const descText = isUnlocked ? desc : '（未発見）';
+
+        return `
+            <div style="background:${bg}; border:1px solid ${isUnlocked ? '#aaa' : '#444'}; padding:10px; margin-bottom:8px; border-radius:4px; display:flex; align-items:center;">
+                <div style="font-size:24px; margin-right:15px; opacity:${isUnlocked ? 1 : 0.3};">${icon}</div>
+                <div>
+                    <div style="font-weight:bold; color:${color}; font-size:16px;">${nameText}</div>
+                    <div style="font-size:12px; color:#aaa; margin-top:4px;">${descText}</div>
+                </div>
+            </div>
+        `;
+    }
+
+    // ローグライク用初期デッキ定義を取得
+    getRogueDeckTemplates() {
+        return [
+            {
+                id: 'magic', name: 'マジックデッキ', desc: '基本魔法と回復で安定して戦う構成',
+                cards: { 'thunder': 3, 'drain': 3, 'cure_all': 2, 'heal': 2, 'reload': 2 }
+            },
+            {
+                id: 'attack', name: 'アタックデッキ', desc: '物理スキルと重力魔法で攻める構成',
+                cards: { 'magic_gravity': 2, 'skill_triple_pre': 3, 'charge_weapon': 3, 'vampire_form': 2, 'reload': 2 }
+            },
+            {
+                id: 'defense', name: 'ディフェンスデッキ', desc: '防御を固めてカウンターを狙う構成',
+                cards: { 'protection': 3, 'body_press': 3, 'skill_stone_form': 2, 'regen': 2, 'reload': 2 }
+            },
+            {
+                id: 'minimum', name: 'ミニマムデッキ', desc: '縮小化状態を活用するテクニカルな構成',
+                cards: { 'shrink_surge': 2, 'needle_rush': 4, 'magic_shrink_deep_dodge': 2, 'magic_shrink_heal': 2, 'reload': 2 }
+            },
+            {
+                id: 'strip', name: 'ストリップデッキ', desc: '脱衣状態で真価を発揮するハイリスク構成',
+                cards: { 'skill_cast_off': 2, 'magic_nature_heal': 2, 'skill_blushing_hammer': 2, 'skill_through_wind': 2, 'magic_paper_knife': 2, 'reload': 2 }
+            },
+            {
+                id: 'chaos', name: 'カオスデッキ', desc: '自傷とランダム効果で戦場を撹乱する構成',
+                cards: { 'chaos_gate': 1, 'trinity_burst': 1, 'reload': 2, 'magic_chaos_2': 4, 'magic_chaos_3': 4 }
+            },
+            {
+                id: 'poison', name: 'ポイズンデッキ', desc: '状態異常を利用し、逆境を力に変える構成',
+                cards: { 'magic_purge': 4, 'magic_turnaround': 4, 'passive_cursed_ring': 1, 'cure_size': 1, 'reload': 2 }
+            },
+            {
+                id: 'random', name: 'ランダマイザー', desc: 'ランダムな6種のカード(x2)で開始する運試し',
+                isRandom: true
+            }
+        ];
+    }
+
     // --- ローグライクモード管理 ---
 
     confirmStartRogueMode() {
         if (confirm("【試練の洞窟】\n資産を持ち込めない「ローグライクモード」を開始します。\n現在の装備・デッキは一時的に預かり、終了時に返却されます。\nよろしいですか？")) {
             this.startRogueMode();
         }
+    }
+
+    showRogueDeckSelection() {
+        // 1. デッキ候補の抽選 (全8種からランダム3種)
+        const allDecks = this.getRogueDeckTemplates();
+        // シャッフル
+        for (let i = allDecks.length - 1; i > 0; i--) {
+            const j = Math.floor(Math.random() * (i + 1));
+            [allDecks[i], allDecks[j]] = [allDecks[j], allDecks[i]];
+        }
+        const candidates = allDecks.slice(0, 3); // 先頭3つを取得
+
+        // 2. UI表示 (game-menu-overlayを利用)
+        this.menuUi.overlay.style.display = 'flex';
+        this.menuUi.title.textContent = "初期デッキ選択";
+        this.menuUi.title.style.color = "#f1c40f";
+        this.menuUi.loot.style.display = 'none';
+        this.ui.battleCommands.style.display = 'none';
+        this.ui.systemCommands.style.display = 'none';
+
+        // デッキ選択肢のHTML生成
+        let html = `<div style="margin-bottom:15px;">今回の運命を決めるデッキを選んでください。</div>`;
+        html += `<div style="display:flex; flex-direction:column; gap:10px; width:100%;">`;
+        
+        candidates.forEach((deck, index) => {
+            // 内容リスト作成
+            let contents = "";
+            if (deck.isRandom) {
+                contents = "ランダムな魔法 x12";
+            } else {
+                const parts = [];
+                for (const [id, count] of Object.entries(deck.cards)) {
+                    const card = CARD_DATABASE.find(c => c.id === id);
+                    const name = card ? card.name : id;
+                    parts.push(`${name} x${count}`);
+                }
+                contents = parts.join(', ');
+            }
+
+            html += `
+                <button class="btn" id="rogue-deck-btn-${index}" style="text-align:left; padding:15px; border:1px solid #777;">
+                    <div style="font-weight:bold; color:#f1c40f; margin-bottom:5px;">${deck.name}</div>
+                    <div style="font-size:12px; color:#ccc; margin-bottom:5px;">${deck.desc}</div>
+                    <div style="font-size:11px; color:#aaa;">${contents}</div>
+                </button>
+            `;
+        });
+        html += `</div>`;
+
+        this.menuUi.content.innerHTML = html;
+        this.menuUi.buttons.innerHTML = ''; // 下部ボタンは不要（戻るボタンを置くならここ）
+
+        // ボタンイベント設定 (innerHTMLで生成したため後付け)
+        candidates.forEach((deck, index) => {
+            document.getElementById(`rogue-deck-btn-${index}`).onclick = () => {
+                this.confirmRogueDeck(deck);
+            };
+        });
+    }
+
+    confirmRogueDeck(deckDef) {
+        let deckIds = [];
+
+        if (deckDef.isRandom) {
+            const candidates = CARD_DATABASE.filter(c => !c.isSynthesisOnly && c.type !== 'passive' && c.type !== 'none' && c.type !== 'misc');
+            const selectedTypes = [];
+            for (let i = 0; i < 6; i++) {
+                if (candidates.length === 0) break;
+                const idx = Math.floor(Math.random() * candidates.length);
+                selectedTypes.push(candidates.splice(idx, 1)[0]); 
+            }
+            selectedTypes.forEach(card => deckIds.push(card.id, card.id));
+        } else {
+            for (const [id, count] of Object.entries(deckDef.cards)) {
+                for (let i = 0; i < count; i++) deckIds.push(id);
+            }
+        }
+
+        this.masterDeck = deckIds.map(id => CARD_DATABASE.find(c => c.id === id)).filter(c => c);
+        this.cardPool = [];
+
+        this.log(`デッキ『${deckDef.name}』で挑戦開始！`);
+        this.startDungeon();
+        this.showToast("【試練開始】装備とデッキは一時的に預かりました。", "warning");
     }
 
     startRogueMode() {
@@ -518,23 +807,13 @@ class BattleSystem {
         this.permInventory = [];
         this.equipment = { weapon: null, armor: null, accessory: null };
         this.tempInventory = [];
-        
-        // 初期デッキ再設定
-        const initialIds = [
-            'fire', 'thunder', 'full_burst', 'snipe',
-            'reload', 'cure_all', 'heal', 'regen',
-            'skill_triple_pre', 'charge_weapon', 'shrink_surge', 'vampire_form'
-        ];
-        this.masterDeck = initialIds.map(id => CARD_DATABASE.find(c => c.id === id));
-        this.cardPool = [];
 
         // 3. モード設定
         this.mode = 'rogue';
-        this.depth = 0; // startDungeonでリセットされるが念のため
+        this.depth = 0;
 
-        // 4. 開始
-        this.startDungeon();
-        this.showToast("【試練開始】装備とデッキは一時的に預かりました。", "warning");
+        // ▼ 変更: デッキを決め打ちせず、選択画面へ遷移する
+        this.showRogueDeckSelection();
     }
 
     endRogueMode() {
@@ -597,14 +876,25 @@ class BattleSystem {
         this.unequipAll();
 
         // 2. 各スロットの最強アイテムを探して装備
-        const types = ['weapon', 'armor', 'accessory'];
+        const types = ['weapon', 'armor', 'accessory', 'magic_circle'];
         types.forEach(type => {
             // そのタイプのアイテムを抽出
             const items = this.permInventory.filter(i => i.type === type);
             if (items.length === 0) return;
 
-            // 評価値（ATK + DEF）でソート
-            items.sort((a, b) => ((b.atk||0) + (b.def||0) + (b.int||0)) - ((a.atk||0) + (a.def||0) + (a.int||0)));
+            // 評価値（ATK + DEF）でソート (魔法陣は簡易スコア)
+            items.sort((a, b) => {
+                const getScore = (i) => {
+                    if (i.type === 'magic_circle' && i.passive) {
+                        // 簡易スコア: 倍率系なら (value - 1) * 1000
+                        if (i.passive.type === 'stat_mult') return (i.passive.value - 1) * 1000;
+                        if (i.passive.type === 'shrink_int') return (i.passive.intMult - 1) * 1000;
+                        return 10;
+                    }
+                    return (i.atk||0) + (i.def||0) + (i.int||0);
+                };
+                return getScore(b) - getScore(a);
+            });
             
             // 最強を装備
             const bestItem = items[0];
@@ -617,7 +907,7 @@ class BattleSystem {
 
     // 全装備解除ヘルパー
     unequipAll() {
-        ['weapon', 'armor', 'accessory'].forEach(slot => {
+        ['weapon', 'armor', 'accessory', 'magic_circle'].forEach(slot => {
             if (this.equipment[slot]) {
                 this.permInventory.push(this.equipment[slot]);
                 this.equipment[slot] = null;
@@ -660,6 +950,14 @@ class BattleSystem {
         let maxMinShrinkLevel = 0; // 装備による縮小下限レベルの最大値
         let statMultipliers = { atk: 1.0, def: 1.0, int: 1.0, spd: 1.0, hp: 1.0 }; // 乗算補正
 
+        // ▼ 追加: 魔法陣ブースト判定 (魔法陣ループの前に定義)
+        let mcBoostRate = 1.0;
+        if (this.equipment.accessory && this.equipment.accessory.passive && this.equipment.accessory.passive.type === 'mc_booster') {
+            mcBoostRate = 2.0; // 上昇量を2倍にする
+        }
+        // ▼ 追加: 手札上限ボーナス用変数
+        this.handLimitBonus = 0;
+
         // 1. 装備補正
         Object.values(this.equipment).forEach(item => {
             if (item) {
@@ -678,12 +976,110 @@ class BattleSystem {
                     if (item.stats.spd) addSpd += item.stats.spd;
                 }
                 if (item.passive) {
+                    if (item.passive.handSizeMod) this.handLimitBonus += item.passive.handSizeMod;
+                    if (item.passive.type === 'hand_size_up') this.handLimitBonus += item.passive.value;
                     if (item.passive.minShrinkLevel) maxMinShrinkLevel = Math.max(maxMinShrinkLevel, item.passive.minShrinkLevel);
                     if (item.passive.statMultiplier) {
                         if (item.passive.statMultiplier.atk) statMultipliers.atk *= item.passive.statMultiplier.atk;
                         if (item.passive.statMultiplier.def) statMultipliers.def *= item.passive.statMultiplier.def;
                         if (item.passive.statMultiplier.int) statMultipliers.int *= item.passive.statMultiplier.int;
                         if (item.passive.statMultiplier.spd) statMultipliers.spd *= item.passive.statMultiplier.spd;
+                    }
+                }
+
+                // magic_circleの場合の処理を追加
+                if (item && item.type === 'magic_circle') {
+                    const mc = item.passive; // MAGIC_CIRCLE_DATABASEの定義
+
+                    // 小人の留め針(pin_small)チェック
+                    const hasPin = this.equipment.accessory && this.equipment.accessory.id.startsWith('pin_small');
+                    if (mc.type === 'shrink_int' && hasPin) {
+                        // 留め針がある場合、この魔法陣の効果は無効化される
+                        return;
+                    }
+                    
+                    if (mc.stats) {
+                        if (mc.stats.hpMult !== undefined) statMultipliers.hp *= mc.stats.hpMult;
+                        if (mc.stats.defMult !== undefined) statMultipliers.def *= mc.stats.defMult;
+                    }
+
+                    // ステータス倍率適用
+                    if (mc.type === 'stat_mult') {
+                        const effectiveValue = 1 + (mc.value - 1) * mcBoostRate;
+                        if (mc.stat === 'hp') statMultipliers.hp *= effectiveValue;
+                        if (mc.stat === 'atk') statMultipliers.atk *= effectiveValue;
+                        if (mc.stat === 'def') statMultipliers.def *= effectiveValue;
+                        if (mc.stat === 'int') statMultipliers.int *= effectiveValue;
+                        if (mc.stat === 'spd') statMultipliers.spd *= effectiveValue;
+                    }
+                    // 縮小・INT
+                    if (mc.type === 'shrink_int') {
+                        statMultipliers.int *= mc.intMult;
+                        maxMinShrinkLevel = Math.max(maxMinShrinkLevel, mc.minLevel);
+                    }
+                    // 武器シナジー (ステータス分)
+                    if (mc.type === 'weapon_synergy' && this.equipment.weapon && this.equipment.weapon.name.includes(mc.wType)) {
+                        if (mc.stats) {
+                            if (mc.stats.atkMult) statMultipliers.atk *= mc.stats.atkMult;
+                            if (mc.stats.intMult) statMultipliers.int *= mc.stats.intMult;
+                            if (mc.stats.defMult) statMultipliers.def *= mc.stats.defMult;
+                            if (mc.stats.hpMult) statMultipliers.hp *= mc.stats.hpMult;
+                            if (mc.stats.evasionAdd) { /* 回避率は別途管理が必要 */ }
+                        }
+                    }
+                    // 裸シナジー
+                    if (mc.type === 'naked_synergy') {
+                        if (!this.equipment.weapon && !this.equipment.armor) {
+                            if (mc.mode === 'offensive') { statMultipliers.atk *= 2.0; statMultipliers.int *= 2.0; }
+                            if (mc.mode === 'defensive') { statMultipliers.def *= 2.0; statMultipliers.hp *= 2.0; }
+                        }
+                    }
+                    // 孤高シナジー
+                    if (mc.type === 'solo_synergy') {
+                        if (!this.equipment.weapon && !this.equipment.armor && !this.equipment.accessory) {
+                            statMultipliers.hp *= 3.0; // +200% = 3倍
+                            statMultipliers.int *= 3.0;
+                            statMultipliers.atk = 0; // -100%
+                            statMultipliers.def = 0;
+                            // 手札上限+1, 状態異常無効は別途処理
+                        }
+                    }
+                    // 代償 (HP半減)
+                    if (mc.type === 'trade_off_regen') {
+                        statMultipliers.hp *= mc.hpMult;
+                    }
+                }
+
+                // --- アクセサリーの処理 (追加) ---
+                if (item.type === 'accessory' && item.passive) {
+                    const p = item.passive;
+                    const weaponName = this.equipment.weapon ? this.equipment.weapon.name : '';
+                    const armorName = this.equipment.armor ? this.equipment.armor.name : '';
+
+                    if (p.type === 'chaos_healer') {
+                        this.handLimitBonus = (this.handLimitBonus || 0) - 3;
+                    }
+
+                    // 武器シナジー (ステータス系)
+                    if (p.type === 'weapon_syn_stat' && weaponName.includes(p.wType)) {
+                        if (p.stat === 'def') statMultipliers.def *= p.val;
+                        if (p.stat === 'atk') statMultipliers.atk *= p.val;
+                        if (p.stat === 'int') statMultipliers.int *= p.val;
+                    }
+                    // 杖シナジー (HP + 手札)
+                    if (p.type === 'weapon_syn_wand' && weaponName.includes(p.wType)) {
+                        statMultipliers.hp *= 1.2;
+                        this.handLimitBonus += 1; // 後で startPlayerTurn で使用
+                    }
+
+                    // 防具シナジー
+                    if (p.type === 'armor_syn_heavy' && armorName.includes(p.aType)) {
+                        statMultipliers.hp *= 1.2;
+                        statMultipliers.def *= 1.2;
+                    }
+                    if (p.type === 'armor_syn_robe' && armorName.includes(p.aType)) {
+                        statMultipliers.def *= 1.2;
+                        statMultipliers.spd *= 1.2;
                     }
                 }
             }
@@ -1008,7 +1404,8 @@ class BattleSystem {
         const slots = [
             { id: 'weapon', label: '武器 (Weapon)' },
             { id: 'armor', label: '防具 (Armor)' },
-            { id: 'accessory', label: '装飾 (Accessory)' }
+            { id: 'accessory', label: '装飾 (Accessory)' },
+            { id: 'magic_circle', label: '魔法陣 (Circle)' }
         ];
 
         let leftHtml = `<h3>現在の装備</h3>`;
@@ -1509,6 +1906,52 @@ class BattleSystem {
         this.log(`=== 地下 ${this.depth} 階 ===`);
         this.log(`${this.enemy.name} が現れた！`);
         
+        // 開幕効果
+        if (this.equipment.accessory && this.equipment.accessory.passive) {
+            const p = this.equipment.accessory.passive;
+
+            // 1. 達人の鞘 (開幕チャージ)
+            if (p.type === 'start_charge') {
+                this.player.weaponCharge = true;
+                this.log("達人の鞘により、必殺技の準備が完了している！");
+            }
+
+            // 2. 守護者の紋章 (盾装備時、3ターンDEF+50%)
+            if (p.type === 'weapon_syn_shield' && this.equipment.weapon && this.equipment.weapon.name.includes('大盾')) {
+                this.player.addBuff({
+                    buffStats: { def: Math.floor(this.player.def * 0.5) },
+                    duration: 3,
+                    name: '守護者の加護'
+                });
+                this.log("守護者の紋章が輝き、防御力が大幅に向上した！");
+                this.recalcStats();
+            }
+        }
+
+        // 戦闘開始時効果 (魔法陣)
+        if (this.equipment.magic_circle) {
+            const mc = this.equipment.magic_circle.passive;
+            // 状態異常付与
+            if (mc.type === 'battle_start_status') {
+                // 孤高の魔法陣なら無効化チェックが必要だが、自身がかけるものなので適用してよいか、
+                // あるいは applyStatus 側で弾く
+                this.applyStatus(mc.status, 99); 
+            }
+            // 縮小操作
+            if (mc.type === 'battle_start_shrink') {
+                this.player.shrinkLevel = Math.max(0, Math.min(3, this.player.shrinkLevel + mc.value));
+            }
+            // 防壁
+            if (mc.type === 'start_barrier_atk') {
+                this.player.barrier = (this.player.barrier||0) + Math.floor(this.player.atk * mc.value);
+                this.log(`${mc.name}で防壁展開！`);
+            }
+            // 回復
+            if (mc.type === 'start_heal') {
+                this.player.heal(Math.floor(this.player.maxHp * mc.value));
+            }
+        }
+
         // 戦闘開始
         this.turn = 1;
 
@@ -1888,16 +2331,39 @@ class BattleSystem {
         ]);
     }
 
-    // ログ出力
-    log(message) {
-        const div = document.createElement('div');
-        div.className = 'log-entry';
-        div.textContent = message;
-        this.ui.log.appendChild(div);
-        // 古いログを消す（最大3行維持）
-        if (this.ui.log.children.length > 3) {
-            this.ui.log.removeChild(this.ui.log.firstChild);
+    // 変更: ログをキューに追加し、処理を開始するだけのメソッドにする
+    log(text) {
+        this.logQueue.push(text);
+        this.processLogQueue();
+    }
+
+    // 新規追加: キューにあるログを順番に表示する非同期メソッド
+    async processLogQueue() {
+        // すでに処理中なら二重に実行しない
+        if (this.isProcessingLog) return;
+        
+        this.isProcessingLog = true;
+
+        const logContainer = this.ui.log;
+
+        while (this.logQueue.length > 0) {
+            const text = this.logQueue.shift(); // 先頭から取り出す
+
+            if (logContainer) {
+                const entry = document.createElement('div');
+                entry.className = 'log-entry';
+                entry.innerHTML = text; // innerHTMLにして色付けタグ等を有効化
+                
+                logContainer.appendChild(entry);
+                
+                // 最新の行へスクロール
+                logContainer.scrollTop = logContainer.scrollHeight;
+            }
+
+            await new Promise(resolve => setTimeout(resolve, 50));
         }
+
+        this.isProcessingLog = false;
     }
 
     // UI更新関連
@@ -2179,14 +2645,7 @@ class BattleSystem {
         this.saveGame(); // ターン開始時セーブ
         
         // 手札補充
-        let handLimit = 4; // デフォルト4枚
-        // 装備パッシブによる手札上限補正
-        Object.values(this.equipment).forEach(item => {
-            if (item && item.passive) {
-                if (item.passive.type === 'hand_size_up') handLimit += item.passive.value;
-                if (item.passive.handSizeMod) handLimit += item.passive.handSizeMod;
-            }
-        });
+        const handLimit = 4 + (this.handLimitBonus || 0);
         // 最低保証
         if (handLimit < 1) handLimit = 1;
         this.deck.fillHand(handLimit);
@@ -2293,6 +2752,15 @@ class BattleSystem {
                 // 必殺技チャージ判定
                 if (this.player.weaponCharge) {
                     this.player.weaponCharge = false; // 消費
+
+                    // ▼ 追加: 剣シナジー (必殺技2倍)
+                    let specMult = 1.0;
+                    if (this.equipment.accessory && this.equipment.accessory.passive &&
+                        this.equipment.accessory.passive.type === 'weapon_syn_spec' && 
+                        this.equipment.weapon && this.equipment.weapon.name.includes('剣')) {
+                        specMult = 2.0;
+                        this.log("剣士の腕輪が輝き、必殺技が強化された！");
+                    }
                     
                     // 武器種別判定
                     let wType = 'NONE';
@@ -2309,6 +2777,7 @@ class BattleSystem {
 
                     const artFunc = WEAPON_ARTS_LOGIC[wType] || WEAPON_ARTS_LOGIC['NONE'];
                     const art = artFunc(this.player, this.enemy);
+                    art.val *= specMult;
                     this.log(`必殺技！ ${art.msg}`);
 
                     if (art.type === 'damage') {
@@ -2340,41 +2809,132 @@ class BattleSystem {
                         // 追加効果: デッキからランダム発動
                         await this.executeCardEffect({ type: 'special', id: 'chaos_gate' });
                     }
+
+                    // [拡張] 被弾カウンター (Damage Counter)
+                    if (this.enemy.counterStance && this.enemy.counterStance.type === 'damage') {
+                        const counterDmg = this.player.takeDamage(this.enemy.counterStance.dmg);
+                        this.log(`敵の反撃！ ${counterDmg} のダメージを受けた！`);
+                    }
+                    
+                    // ドレインバフ判定
+                    const drainBuff = this.player.buffs.find(b => b.buffId === 'drain_attack');
+                    if (drainBuff) {
+                        const healAmt = Math.floor(dmg * 0.5);
+                        if (healAmt > 0) {
+                            this.player.heal(healAmt);
+                            this.log(`吸血！HPを ${healAmt} 回復した。`);
+                        }
+                    }
+                    this.animateEnemyDamage();
                 } else {
-                    dmg = Math.floor(this.player.atk * (randomInt(90, 110) / 100)); // 乱数幅あり
-
-                    // 研磨 (atk_bonus) の補正処理
-                    const atkBonus = this.player.buffs.find(b => b.buffId === 'atk_bonus');
-                    if (atkBonus) {
-                        dmg = Math.floor(dmg * 1.5);
-                        this.log("(研磨の効果でダメージ1.5倍！)");
+                    // ▼▼▼ 修正: 多段攻撃(トリプルアタック)の判定 ▼▼▼
+                    let hitCount = 1;
+                    let dmgRate = 1.0;
+                    const multiHitBuffIndex = this.player.buffs.findIndex(b => b.type === 'multi_hit');
+                    
+                    if (multiHitBuffIndex !== -1) {
+                        hitCount = this.player.buffs[multiHitBuffIndex].count || 3;
+                        // バフを消費(削除)
+                        this.player.buffs.splice(multiHitBuffIndex, 1);
+                        this.log(`連撃！ ${hitCount}回攻撃！`);
                     }
 
-                    // [拡張] バリア処理
-                    const bRes = this.enemy.applyBarrier(dmg);
-                    dmg = bRes.damage;
-                    if (bRes.absorbed > 0) this.log(`(敵のバリアが ${bRes.absorbed} 軽減)`);
+                    if (this.equipment.accessory && this.equipment.accessory.passive &&
+                        this.equipment.accessory.passive.type === 'weapon_syn_cannon' &&
+                        this.equipment.weapon && this.equipment.weapon.name.includes('魔導砲')) {
+                        
+                        hitCount += 2;
+                        dmgRate = 0.7; // -30%
+                        this.log("連射モード！");
+                    }
 
-                    dmg = this.enemy.takeDamage(dmg);
-                    this.log(`通常攻撃！敵に ${dmg} のダメージ！`);
-                }
+                    // 攻撃回数増加 (状態異常時) - 魔法陣
+                    if (this.equipment.magic_circle && this.equipment.magic_circle.passive.type === 'status_attack_plus') {
+                        if (this.player.currentStatus) {
+                            // multi_hitバフを付与するか、直接 hitCount を増やす
+                            // ここでは簡易的に hitCount を操作するロジックに追加
+                            hitCount++;
+                            this.log("逆境の力で攻撃回数増加！");
+                        }
+                    }
+                    
+                    // 攻撃回数分ループ
+                    for (let i = 0; i < hitCount; i++) {
+                        // 2回目以降は少しウェイトを入れる（演出用）
+                        if (i > 0) await wait(200);
 
-                // [拡張] 被弾カウンター (Damage Counter)
-                if (this.enemy.counterStance && this.enemy.counterStance.type === 'damage') {
-                    const counterDmg = this.player.takeDamage(this.enemy.counterStance.dmg);
-                    this.log(`敵の反撃！ ${counterDmg} のダメージを受けた！`);
-                }
-                
-                // ドレインバフ判定
-                const drainBuff = this.player.buffs.find(b => b.buffId === 'drain_attack');
-                if (drainBuff) {
-                    const healAmt = Math.floor(dmg * 0.5);
-                    if (healAmt > 0) {
-                        this.player.heal(healAmt);
-                        this.log(`吸血！HPを ${healAmt} 回復した。`);
+                        let dmg = Math.floor(this.player.atk * (randomInt(90, 110) / 100)); // 乱数幅あり
+                        dmg = Math.floor(dmg * dmgRate);
+
+                        // 魔法陣効果
+                        if (this.equipment.magic_circle) {
+                            const mc = this.equipment.magic_circle.passive;
+                            
+                            // 賭博
+                            if (mc.type === 'attack_gamble') {
+                                if (Math.random() < 0.5) {
+                                    dmg = 0;
+                                    this.log("賭けに負けた……ダメージ0！");
+                                } else {
+                                    dmg *= 2;
+                                    this.log("賭けに勝った！ダメージ2倍！");
+                                }
+                            }
+                            // 斧クリティカル
+                            if (mc.type === 'weapon_synergy' && mc.effect === 'critical' && this.equipment.weapon && this.equipment.weapon.name.includes('斧')) {
+                                if (Math.random() < 0.3) { // 30%くらい
+                                    dmg = Math.floor(dmg * 1.5);
+                                    this.log("クリティカルヒット！");
+                                }
+                            }
+                        }
+
+                        // 研磨 (atk_bonus) の補正
+                        const atkBonus = this.player.buffs.find(b => b.buffId === 'atk_bonus');
+                        if (atkBonus) {
+                            dmg = Math.floor(dmg * 1.5);
+                            if (i === 0) this.log("(研磨の効果でダメージ1.5倍！)");
+                        }
+
+                        // [拡張] バリア処理
+                        const bRes = this.enemy.applyBarrier(dmg);
+                        dmg = bRes.damage;
+                        if (bRes.absorbed > 0 && i === 0) this.log(`(敵のバリアが軽減)`);
+
+                        // ダメージ適用
+                        dmg = this.enemy.takeDamage(dmg);
+                        
+                        if (hitCount > 1) {
+                            this.log(`${i + 1}撃目: 敵に ${dmg} のダメージ！`);
+                        } else {
+                            this.log(`通常攻撃！敵に ${dmg} のダメージ！`);
+                        }
+                        this.animateEnemyDamage();
+
+                        // ドレインバフ判定 (各攻撃で判定)
+                        const drainBuff = this.player.buffs.find(b => b.buffId === 'drain_attack');
+                        if (drainBuff) {
+                            const healAmt = Math.floor(dmg * 0.5);
+                            if (healAmt > 0) {
+                                this.player.heal(healAmt);
+                                // ログが流れすぎるので初回のみ表示
+                                if (i === 0) this.log(`吸血！HPを回復した。`); 
+                                this.updateStatsUI();
+                            }
+                        }
+
+                        // [拡張] 被弾カウンター (Damage Counter) - 反撃も各攻撃ごとに受けるリスクあり
+                        if (this.enemy.counterStance && this.enemy.counterStance.type === 'damage') {
+                            const counterDmg = this.player.takeDamage(this.enemy.counterStance.dmg);
+                            this.log(`敵の反撃！ ${counterDmg} のダメージ！`);
+                            this.updateStatsUI();
+                            if (this.player.isDead()) break; // 死亡したら中断
+                        }
+
+                        // 敵が死んだらループを抜ける
+                        if (this.enemy.isDead()) break;
                     }
                 }
-                this.animateEnemyDamage();
                 break;
             
             case 'defend':
@@ -2701,6 +3261,33 @@ class BattleSystem {
                 }
             }
 
+            // [拡張] 汎用ターン終了時効果 (ENDGAME_ITEMS / Magic Circle)
+            if (this.equipment.magic_circle) {
+                const mc = this.equipment.magic_circle.passive;
+                
+                // 代償回復
+                if (mc.type === 'trade_off_regen') {
+                    this.player.heal(Math.floor(this.player.maxHp * mc.regen));
+                }
+                // 盾シナジー (防壁増強)
+                if (mc.type === 'weapon_synergy' && mc.effect === 'shield_boost' && this.equipment.weapon && this.equipment.weapon.name.includes('大盾')) {
+                    if (this.player.barrier > 0) {
+                        this.player.barrier = Math.floor(this.player.barrier * 1.2);
+                        this.log("防壁が強化された！");
+                    }
+                }
+                // 手札廃棄
+                if (mc.type === 'turn_end_discard') {
+                    if (this.deck.hand.length > 0) {
+                        const idx = Math.floor(Math.random() * this.deck.hand.length);
+                        const discarded = this.deck.hand.splice(idx, 1)[0];
+                        this.deck.discardPile.push(discarded);
+                        this.log(`${discarded.name} が記憶から消えた……`);
+                        this.renderHandCards();
+                    }
+                }
+            }
+
             // [拡張] 汎用ターン終了時効果 (ENDGAME_ITEMS)
             Object.values(this.equipment).forEach(item => {
                 if (item && item.passive) {
@@ -2818,6 +3405,15 @@ class BattleSystem {
             if (Math.random() * 100 > hitChance) {
                 this.log("ヒラリ！攻撃を回避した！");
             } else {
+                // 書シナジー (被ダメ無効) - 魔法陣
+                if (this.equipment.magic_circle && this.equipment.magic_circle.passive.type === 'weapon_synergy' && this.equipment.magic_circle.passive.effect === 'barrier_chance') {
+                    if (this.equipment.weapon && this.equipment.weapon.name.includes('書') && (!this.player.barrier || this.player.barrier <= 0)) {
+                        if (Math.random() < 0.2) {
+                            action.damageScale = 0; // ダメージ0化
+                            this.log("賢者の知恵でダメージを無効化した！");
+                        }
+                    }
+                }
                 let rawDmg = Math.floor(this.enemy.atk * action.damageScale);
                 
                 // [拡張] バリア処理
@@ -2912,6 +3508,10 @@ class BattleSystem {
         this.player.battleStatsMod = { atk: 0, def: 0, int: 0, spd: 0 };
         this.player.weaponCharge = false;
         this.player.dropQualityBonus = 0;
+
+        // ▼ 追加: 混沌の報酬フラグをリセット
+        this.chaosRewardCard = false; // 追加カード獲得フラグ
+        this.chaosLootMod = 0;        // ドロップ補正値加算
     }
 
     processWin() {
@@ -2919,7 +3519,26 @@ class BattleSystem {
         this.cleanupBattle(); // デッキ等のリセット
         
         // ドロップ生成
+        // ▼ 追加: 混沌の効果による追加カード報酬
+        if (this.chaosRewardCard) {
+            const randomCard = CARD_DATABASE[Math.floor(Math.random() * CARD_DATABASE.length)];
+            if (randomCard) {
+                // コピーを作成して追加
+                const newCard = JSON.parse(JSON.stringify(randomCard));
+                this.permInventory.push(newCard);
+                this.log(`混沌の報酬: カード『${newCard.name}』を獲得！`);
+            }
+        }
+
         const loot = this.generateLoot();
+
+        // 魔法陣: 階層スキップ
+        if (this.equipment.magic_circle && this.equipment.magic_circle.passive.type === 'win_skip_floor') {
+            if (Math.random() < 0.1) {
+                this.depth++;
+                this.log("魔法陣が輝き、階層が転移した！");
+            }
+        }
 
         // [修正] ローグライクモードなら即時入手
         if (this.mode === 'rogue') {
@@ -2944,12 +3563,32 @@ class BattleSystem {
 
     // ドロップ生成ロジック
     generateLoot() {
-        // ドロップ率調整: 武器40%, 防具40%, 装飾20%
-        const rand = Math.random();
+        // ドロップ率の重み付け初期値
+        let weights = { weapon: 35, armor: 35, accessory: 15, magic_circle: 15 };
+
+        // 魔法陣によるレート補正
+        if (this.equipment.magic_circle) {
+            const mc = this.equipment.magic_circle.passive;
+            if (mc.type === 'drop_rate_mod') {
+                // 対象の重みを大幅に増やす (+50)
+                if (weights[mc.target]) weights[mc.target] += 50;
+            }
+            // カード化 (20%)
+            if (mc.type === 'win_card_loot' && Math.random() < mc.chance) {
+                const card = CARD_DATABASE[Math.floor(Math.random() * CARD_DATABASE.length)];
+                card.cost = 0; // 念のため
+                return card; 
+            }
+        }
+
+        const totalWeight = Object.values(weights).reduce((a, b) => a + b, 0);
+        let r = Math.random() * totalWeight;
         let type = 'weapon';
-        if (rand < 0.4) type = 'weapon';
-        else if (rand < 0.8) type = 'armor';
-        else type = 'accessory';
+        
+        if (r < weights.weapon) type = 'weapon';
+        else if (r < weights.weapon + weights.armor) type = 'armor';
+        else if (r < weights.weapon + weights.armor + weights.accessory) type = 'accessory';
+        else type = 'magic_circle';
 
         // [調整] ローグライクモードかつ浅層(30階未満)では「小人の留め針」を出さない
         // generateLoot内でアイテムIDを直接指定して生成するわけではないが、
@@ -3038,6 +3677,13 @@ class BattleSystem {
             item.def = 0;
             item.hp = 0;
             item.spd = 0;
+        } else if (type === 'magic_circle') {
+            const effect = MAGIC_CIRCLE_DATABASE[Math.floor(Math.random() * MAGIC_CIRCLE_DATABASE.length)];
+            item.id = effect.id;
+            item.name = effect.name;
+            item.passive = effect;
+            // 魔法陣は基本ステータス0
+            item.atk=0; item.def=0; item.int=0; item.hp=0; item.spd=0;
         }
 
         // 強化値 (+X) システム
@@ -3053,7 +3699,17 @@ class BattleSystem {
             plusVal = Math.floor(this.depth / 3);
         }
 
-        if (plusVal > 0 && type !== 'accessory') {
+        // 鍛冶の魔法陣 (補正値+1)
+        if (this.equipment.magic_circle && this.equipment.magic_circle.passive.type === 'loot_plus_mod') {
+            plusVal += 1;
+        }
+
+        // ▼ 追加: 混沌の効果による補正値加算
+        if (this.chaosLootMod) {
+            plusVal += this.chaosLootMod;
+        }
+
+        if (plusVal > 0 && type !== 'accessory' && type !== 'magic_circle') {
             item.name += `(+${plusVal})`;
             item.plusValue = plusVal;
 
@@ -3276,11 +3932,21 @@ class BattleSystem {
 
             if (this.player.shrinkLevel < 3) {
                 this.player.shrinkLevel++;
+                this.registerCollection('statuses', 'shrink'); // ▼ 追加: 縮小登録
                 this.log("体が小さくなってしまった！(ATK/DEF低下)");
             } else {
                 this.log("これ以上は小さくなれない！");
             }
         } else {
+            // ▼▼▼ 修正: 解放の証による状態異常無効化 (判定強化) ▼▼▼
+            const acc = this.equipment.accessory;
+            // プロパティ判定(isLiberationProof) または ID判定(acc_liberation_proof)
+            if (acc && (acc.isLiberationProof || acc.id === 'acc_liberation_proof')) {
+                // 縮小以外は無効
+                this.log("解放の証が状態異常を弾いた！");
+                this.showToast("状態異常無効！", "success");
+                return;
+            }
             // [拡張] 伝説級装備による状態異常無効
             let nullify = false;
             Object.values(this.equipment).forEach(item => {
@@ -3294,6 +3960,9 @@ class BattleSystem {
                 this.showToast("状態異常無効！", "success");
                 return;
             }
+
+            // ▼ 追加: 状態異常にかかったら図鑑登録
+            this.registerCollection('statuses', statusId);
 
             const status = STATUS_TYPES[statusId.toUpperCase()];
             if (status) {
@@ -3320,6 +3989,273 @@ class BattleSystem {
         container.appendChild(el);
         // CSSアニメーションで消えるが、DOMからも削除
         setTimeout(() => { if (el.parentNode) el.parentNode.removeChild(el); }, 3000);
+    }
+
+    // 混沌の効果を実行する
+    async executeChaos(baseCount) {
+        let count = baseCount;
+        
+        if (this.equipment.accessory) {
+            if (this.equipment.accessory.passive.type === 'chaos_reflector') count += 3;
+            if (this.equipment.accessory.passive.type === 'chaos_healer') count += 5;
+        }
+        if (this.equipment.magic_circle) {
+            if (this.equipment.magic_circle.passive.type === 'chaos_cost_zero') count += 3;
+            if (this.equipment.magic_circle.passive.type === 'chaos_death_gamble') count += 8;
+        }
+
+        this.log(`混沌の発動回数: ${baseCount} -> ${count}回`);
+
+        let remaining = count;
+        // 無限ループ防止のリミッター（念のため）
+        let loopSafety = 30; 
+
+        while (remaining > 0 && loopSafety > 0) {
+            remaining--;
+            loopSafety--;
+            await wait(200); // 演出用ウェイト
+
+            if (this.equipment.accessory && this.equipment.accessory.passive.type === 'chaos_healer') {
+                const healVal = Math.floor(this.player.maxHp * 0.2);
+                this.player.heal(healVal);
+            }
+
+            // 効果テーブル (重み付けなしの等確率なら配列からランダム)
+            const roll = randomInt(1, 19);
+            
+            // this.log(`[混沌] 効果発動 (${remaining + 1}回残り)...`);
+
+            switch (roll) {
+                case 1: // ATK+100% (3T)
+                    this.player.addBuff({ type: 'stat_up', buffStats: { atkScale: 1.0 }, duration: 3, name: '混沌の怪力', desc: 'ATK+100%' });
+                    this.log("混沌の怪力！(ATK+100%)");
+                    break;
+                case 2: // DEF+100% (3T)
+                    this.player.addBuff({ type: 'stat_up', buffStats: { def: this.player.def }, duration: 3, name: '混沌の硬化', desc: 'DEF+100%' });
+                    this.log("混沌の硬化！(DEF+100%)");
+                    break;
+                case 3: // INT+100% (3T)
+                    this.player.addBuff({ type: 'stat_up', buffStats: { intScale: 1.0 }, duration: 3, name: '混沌の知性', desc: 'INT+100%' });
+                    this.log("混沌の知性！(INT+100%)");
+                    break;
+                case 4: // SPD+100% (3T)
+                    this.player.addBuff({ type: 'stat_up', buffStats: { spd: this.player.spd }, duration: 3, name: '混沌の加速', desc: 'SPD+100%' });
+                    this.log("混沌の加速！(SPD+100%)");
+                    break;
+                case 5: // 回避+30% (3T)
+                    this.player.addBuff({ type: 'evasion_up', val: 30, duration: 3, name: '混沌の幻影', desc: '回避率+30%' });
+                    this.log("混沌の幻影！(回避+30%)");
+                    break;
+                case 6: // ATKランダムダメージ (0.5~3.0倍)
+                    {
+                        const rate = (randomInt(50, 300) / 100);
+                        const dmg = Math.floor(this.player.atk * rate);
+                        this.enemy.takeDamage(dmg);
+                        this.log(`デタラメな物理攻撃！ ${dmg}ダメージ`);
+                        this.animateEnemyDamage();
+                    }
+                    break;
+                case 7: // INTランダムダメージ (0.5~3.0倍)
+                    {
+                        const rate = (randomInt(50, 300) / 100);
+                        const dmg = Math.floor(this.player.int * rate);
+                        this.enemy.takeDamage(dmg);
+                        this.log(`制御不能な魔力弾！ ${dmg}ダメージ`);
+                        this.animateEnemyDamage();
+                    }
+                    break;
+                case 8: // 固定1ダメージ (ランダムテキスト)
+                    {
+                        const texts = ["小石につまづいて敵にぶつかった！", "デコピンがヒット！", "威嚇したら敵が少しビビった！", "投げキッスが直撃！"];
+                        this.enemy.takeDamage(1);
+                        this.log(`${texts[randomInt(0, texts.length - 1)]}`);
+                        this.animateEnemyDamage();
+                    }
+                    break;
+                case 9: // 自傷50%
+                    {
+                        const selfDmg = Math.floor(this.player.maxHp * 0.5);
+                        if (this.equipment.accessory && this.equipment.accessory.passive.type === 'chaos_reflector') {
+                            this.enemy.takeDamage(selfDmg);
+                            this.log(`「混沌の鏡」が自傷の運命を反転！ 敵に ${selfDmg} のダメージ！`);
+                            this.animateEnemyDamage();
+                        } else {
+                            const actualDmg = Math.min(selfDmg, this.player.hp - 1);
+                            if (actualDmg > 0) {
+                                this.player.takeDamage(actualDmg);
+                                this.log(`魔力が暴走して自爆！ ${actualDmg}のダメージ！`);
+                            } else {
+                                this.log("魔力が暴走したが、ギリギリ持ち堪えた！");
+                            }
+                        }
+                    }
+                    break;
+                case 10: // 勝利時カード獲得
+                    this.chaosRewardCard = true;
+                    this.log("空間が歪み、新たなカードの気配がする…");
+                    break;
+                case 11: // 勝利時装備補正+1
+                    this.chaosLootMod = (this.chaosLootMod || 0) + 1;
+                    this.log("運命が書き換わり、財宝の質が高まった気がする…");
+                    break;
+                case 12: // 縮小化+3 (ランダムテキスト)
+                    {
+                        const texts = ["体が急激に縮んでいく！", "視界が巨大化した！？ いや、私が小さくなったのか！", "まるで人形のようなサイズに！"];
+                        this.log(texts[randomInt(0, texts.length - 1)]);
+                        this.player.shrinkLevel = Math.min(3, this.player.shrinkLevel + 3);
+                    }
+                    break;
+                case 13: // 通常攻撃 (回数反映)
+                    {
+                        this.log("体が勝手に動き出し、武器を振るった！");
+                        let hitCount = 1;
+                        if (this.equipment.accessory && this.equipment.accessory.passive && this.equipment.accessory.passive.type === 'weapon_syn_cannon') hitCount += 2;
+                        if (this.equipment.magic_circle && this.equipment.magic_circle.passive && this.equipment.magic_circle.passive.type === 'status_attack_plus' && this.player.currentStatus) hitCount += 1;
+                        const multiHitBuff = this.player.buffs.find(b => b.type === 'multi_hit');
+                        if (multiHitBuff) hitCount += 2;
+
+                        for(let i=0; i<hitCount; i++) {
+                            if (i > 0) await wait(100);
+                            let dmg = Math.floor(this.player.atk * (randomInt(90, 110)/100));
+                            if (this.equipment.accessory && this.equipment.accessory.passive && this.equipment.accessory.passive.type === 'weapon_syn_cannon') dmg = Math.floor(dmg * 0.7);
+                            this.enemy.takeDamage(dmg);
+                            this.log(`追撃(${i+1}): ${dmg}ダメージ！`);
+                            this.animateEnemyDamage();
+                            if(this.enemy.isDead()) break;
+                        }
+                    }
+                    break;
+                case 14: // 武器必殺技
+                    {
+                        this.log("武器の奥義が勝手に発動する！");
+                        let dmg = Math.floor(this.player.atk * 2.5);
+                        if (this.equipment.accessory && this.equipment.accessory.passive && this.equipment.accessory.passive.type === 'weapon_syn_spec' && this.equipment.weapon && this.equipment.weapon.name.includes('剣')) {
+                            dmg *= 2;
+                        }
+                        this.enemy.takeDamage(dmg);
+                        this.log(`必殺の一撃！ ${dmg}ダメージ！`);
+                        this.animateEnemyDamage();
+                    }
+                    break;
+                case 15: // 抽選回数+2
+                    remaining += 2;
+                    loopSafety += 2; // 安全装置も少し緩める
+                    this.log("混沌が更なる混沌を呼ぶ！ 効果が2回追加！");
+                    break;
+                case 16: // 毒
+                    this.player.addStatus('poison');
+                    this.log("毒霧を吸い込んでしまった！");
+                    break;
+                case 17: // 脱衣 (ランダムテキスト)
+                    this.processForceStrip();
+                    break;
+                case 18: // 何も起こらない (ランダムテキスト)
+                    {
+                        let triggeredDeath = false;
+                        if (this.equipment.magic_circle && this.equipment.magic_circle.passive.type === 'chaos_death_gamble') {
+                            if (Math.random() < 0.10) {
+                                triggeredDeath = true;
+                                this.log("「終焉の魔法陣」が虚無に反応し、破滅の光を放つ……！！");
+                                await wait(500);
+                                
+                                if (this.enemy.isBoss) {
+                                    const bossDmg = Math.floor(this.enemy.maxHp * 0.5);
+                                    this.enemy.takeDamage(bossDmg);
+                                    this.log(`ボスに致命的な一撃！ ${bossDmg}ダメージ！`);
+                                } else {
+                                    this.enemy.takeDamage(99999);
+                                    this.log("敵は消滅した！！(即死)");
+                                }
+                                this.animateEnemyDamage();
+                            }
+                        }
+                        if (!triggeredDeath) {
+                            const texts = ["……しかし、何も起こらなかった。", "不発。", "虚空を見つめた。"];
+                            this.log(texts[randomInt(0, texts.length - 1)]);
+                        }
+                    }
+                    break;
+                case 19: // 防壁獲得
+                    this.player.barrier = (this.player.barrier || 0) + this.player.def;
+                    this.log(`咄嗟に身を守った！ 防壁+${this.player.def}`);
+                    break;
+            }
+
+            this.updateStatsUI();
+            if (this.enemy.isDead() || this.player.isDead()) break;
+        }
+    }
+
+    /**
+     * 強制脱衣処理 (Magic Overload Strip)
+     * 魔法の暴走や副作用により、強制的に脱衣状態にする
+     */
+    processForceStrip() {
+        // すでに脱衣状態なら何もしない
+        if (this.player.hasStatus('undressing') || (this.player.isLiberated)) {
+            return null;
+        }
+
+        // 脱衣状態を付与 (永続扱い)
+        this.player.addStatus('undressing', 99); // 永続扱いで付与
+        
+        // 演出テキストのランダム抽選
+        const patterns = [
+            // パターン1: 暴発 (Burst)
+            {
+                log: "制御しきれない魔力が体内から噴き出し、衝撃で衣服が弾け飛んだ！",
+                reaction: "あ……っ！ 魔力が、体の中から溢れて……服が、耐えられなかったみたい……。はぁ、熱い……。"
+            },
+            
+            // パターン2: 溶解 (Melt)
+            {
+                log: "詠唱の熱が衣服に伝導する……。服が熱を帯びてドロドロに溶け落ちてしまった！",
+                reaction: "んくっ……。服が、溶けて……肌にまとわりついて……。熱いです、ヌルヌルして……気持ち悪い……。"
+            },
+            
+            // パターン3: 透過 (Phase)
+            {
+                log: "魔力との同調率が高まり、肉体が一時的に霊体化した！ 実体を失った服だけが、ヒラリと床に落ちる。",
+                reaction: "あれ……？ 私、服をすり抜けちゃった……？ まるで脱皮したみたい……風が、直接当たってスースーします……。"
+            },
+            
+            // パターン4: 自然 (Nature)
+            {
+                log: "漏れ出た魔力に反応し、魔法のツタが急成長！ 妖精の体を愛でるように衣服を剥ぎ取ってしまった！",
+                reaction: "ひゃうっ！ ツタさん、どこに入って……だ、ダメです！ 服を持っていかないでぇ……っ！"
+            },
+            
+            // パターン5: 意思 (Alive)
+            {
+                log: "魔法の副作用で衣服に仮初めの命が宿った！ ひとりでに紐が解け、重力に従ってズルリと滑り落ちていく……。",
+                reaction: "えっ、嘘……勝手に、解けてる……？ 待って、落ちないで……！ ……あぁ、全部見えちゃいました……。"
+            },
+
+            // パターン6: 蒸発 (Vaporize) - 光の粒子になる
+            {
+                log: "高密度の魔力干渉により、装備していた衣服が一瞬で光の粒子となって霧散した！",
+                reaction: "……え？ 今、パァンって……。うそ、私、一瞬で裸ん坊に……？ 魔力酔いで、頭がクラクラします……。"
+            },
+
+            // パターン7: 内側からの熱 (Internal Heat) - 我慢できずに自分で（半自動）
+            {
+                log: "副作用で体温が急上昇！ 耐え難い熱さに、無意識のうちに自ら服を引き裂いてしまった！",
+                reaction: "はぁ、はぁ……熱い、熱いよぉ……。ダメ、着てられない……。……はっ！ 私、自分で破っちゃった……！？"
+            }
+        ];
+
+        // ランダム抽選
+        const selected = patterns[Math.floor(Math.random() * patterns.length)];
+
+        // ログ出力 (ナレーション)
+        this.log(selected.log);
+        
+        // ログ出力 (妖精のリアクション)
+        // ※セリフであることが分かるように鉤括弧で囲んで表示
+        this.log(`「${selected.reaction}」`); 
+
+        // 呼び出し元で必要であればテキストを返す
+        return selected.log;
     }
 
     // --- 妖精の独り言システム ---

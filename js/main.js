@@ -84,5 +84,19 @@ function getItemById(itemId) {
             return item;
         }
     }
+
+    // 5. 魔法陣
+    if (itemId.startsWith('mc_')) {
+        let master = MAGIC_CIRCLE_DATABASE.find(m => m.id === itemId);
+        if (master) {
+             return {
+                id: master.id,
+                name: master.name,
+                type: 'magic_circle',
+                passive: JSON.parse(JSON.stringify(master)),
+                atk: 0, def: 0, int: 0, hp: 0, spd: 0
+            };
+        }
+    }
     return null;
 }

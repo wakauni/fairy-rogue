@@ -564,3 +564,12 @@ body {
 .status-fear { background-color: #34495e; }
 .status-petrification { background-color: #7f8c8d; }
 .status-shrink { background-color: #1abc9c; }
+
+/* --- Adventure Log --- */
+#log-content-area::-webkit-scrollbar {
+    width: 8px;
+}
+#log-content-area::-webkit-scrollbar-thumb {
+    background: rgba(255,255,255,0.3);
+    border-radius: 4px;
+}

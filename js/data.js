@@ -280,16 +280,55 @@ const CARD_DATABASE = [
         id: 'magic_rebound',
         name: 'リバウンドサイズ',
         type: 'skill_custom',
-        cost: 2,
-        desc: '縮小Lvが下限より高い場合、Lvを1下げて敵に大ダメージを与える',
-        effect: (user, target) => {
-            if (user.shrinkLevel <= user.minShrinkLevel) return { msg: "これ以上は大きくなれない！（不発）" };
+        cost: 3,
+        desc: '縮小化を解除し、解除したレベルに応じた固定大ダメージを与える',
+        effect: (user, target, battle) => {
+            // 1. 現在の縮小レベルチェック
+            if (user.shrinkLevel <= 0) {
+                return { msg: "縮小化していないため、効果がない！（不発）" };
+            }
+
+            // ▼ 追加: 装備による「下限レベル」のチェック ▼
+            let limitLevel = 0;
             
-            user.shrinkLevel--;
-            let dmg = Math.max(1, Math.floor(user.int * 3.0) - Math.floor(target.int / 2));
+            // アクセサリーの確認 (小人の留め針など)
+            if (battle.equipment.accessory && battle.equipment.accessory.passive && battle.equipment.accessory.passive.minLevel) {
+                limitLevel = Math.max(limitLevel, battle.equipment.accessory.passive.minLevel);
+            }
+            
+            // 魔法陣の確認 (小人の魔法陣など)
+            if (battle.equipment.magic_circle && battle.equipment.magic_circle.passive && battle.equipment.magic_circle.passive.minLevel) {
+                limitLevel = Math.max(limitLevel, battle.equipment.magic_circle.passive.minLevel);
+            }
+
+            // 現在のレベルが下限以下なら、解除不可能なので失敗
+            if (user.shrinkLevel <= limitLevel) {
+                return { msg: "装備の呪いにより、元のサイズに戻れない！（発動失敗）" };
+            }
+            // ▲ 追加ここまで ▲
+            // ▼ 修正: レベルに応じたダメージ計算 (指数関数的に強化) ▼
+            let level = user.shrinkLevel;
+            let baseDmg = 0;
+            let scaleMsg = "";
+
+            if (level === 1) {
+                baseDmg = 80;
+                scaleMsg = "一気に元通り！";
+            } else if (level === 2) {
+                baseDmg = 200;
+                scaleMsg = "弾けるように巨大化！";
+            } else if (level >= 3) {
+                baseDmg = 500; // Lv3は特大ダメージ
+                scaleMsg = "限界圧縮からの爆発的解放！";
+            }
+
+            // INT補正も加える (INT * 1.5)
+            let dmg = baseDmg + Math.floor(user.int * 1.5);
+
+            // 3. 縮小解除
+            user.shrinkLevel = 0;
             target.takeDamage(dmg);
-            
-            return { msg: `急激な巨大化の衝撃波！ ${dmg}のダメージ！` };
+            return { msg: `${scaleMsg} 衝撃波で ${dmg} のダメージ！` };
         }
     },
 
@@ -298,10 +337,10 @@ const CARD_DATABASE = [
     {
         id: 'skill_naked_king', name: '裸の王様', type: 'skill_custom', cost: 1,
         desc: '【脱衣限定】戦闘終了までDEF+100。脱衣でない場合は脱衣状態になるのみ',
-        effect: (user, target) => {
+        effect: (user, target, battle) => {
             if (!user.hasStatus('undressing')) {
-                user.addStatus('undressing', 99);
-                return { msg: "服を脱ぎ捨てた！（効果不発）" };
+                battle.processForceStrip();
+                return { msg: "（効果不発）" };
             }
             user.addBuff({ type: 'stat_boost', buffStats: { def: 100 }, name: '裸の王様', duration: 99 });
             return { msg: "堂々たる立ち姿！ 防御力が跳ね上がった！" };
@@ -311,8 +350,8 @@ const CARD_DATABASE = [
     {
         id: 'skill_blushing_hammer', name: '恥じらいの鉄槌', type: 'skill_custom', cost: 2,
         desc: '【脱衣限定】ATK依存の大ダメージ。脱衣でない場合は攻撃できず脱衣になる',
-        effect: (user, target) => {
-            if (!user.hasStatus('undressing')) { user.addStatus('undressing', 99); return { msg: "服が弾け飛んだ！（攻撃失敗）" }; }
+        effect: (user, target, battle) => {
+            if (!user.hasStatus('undressing')) { battle.processForceStrip(); return { msg: "（攻撃失敗）" }; }
             const dmg = calculateDamage(user.atk * 2.5, target.def);
             target.takeDamage(dmg);
             return { msg: `羞恥心を力に変えた一撃！ ${dmg}ダメージ！` };
@@ -322,8 +361,8 @@ const CARD_DATABASE = [
     {
         id: 'magic_nature_heal', name: '自然の癒し', type: 'skill_custom', cost: 2,
         desc: '【脱衣限定】HPを大きく回復。脱衣でない場合は回復できず脱衣になる',
-        effect: (user, target) => {
-            if (!user.hasStatus('undressing')) { user.addStatus('undressing', 99); return { msg: "服を脱いで風を感じた。（回復失敗）" }; }
+        effect: (user, target, battle) => {
+            if (!user.hasStatus('undressing')) { battle.processForceStrip(); return { msg: "（回復失敗）" }; }
             const heal = Math.floor(user.maxHp * 0.5);
             user.heal(heal);
             return { msg: `大自然と一体化して回復！ +${heal}HP` };
@@ -333,8 +372,8 @@ const CARD_DATABASE = [
     {
         id: 'skill_through_wind', name: 'スルーザウィンド', type: 'skill_custom', cost: 1,
         desc: '【脱衣限定】次に受けるダメージを1回だけ無効化。脱衣でない場合は脱衣になるのみ',
-        effect: (user, target) => {
-            if (!user.hasStatus('undressing')) { user.addStatus('undressing', 99); return { msg: "身軽になった！（効果不発）" }; }
+        effect: (user, target, battle) => {
+            if (!user.hasStatus('undressing')) { battle.processForceStrip(); return { msg: "（効果不発）" }; }
             user.addBuff({ type: 'invincible', duration: 1, name: '回避態勢' });
             return { msg: "風のように回避する構えをとった！" };
         }
@@ -349,6 +388,35 @@ const CARD_DATABASE = [
             const dmg = calculateMagicDamage(user.int * multiplier, target.int);
             target.takeDamage(dmg);
             return { msg: `防御を捨てた鋭い魔力！ ${dmg}ダメージ！` };
+        }
+    },
+    // 例: エーテルストライク（仮称：脱衣時のみ撃てる、または撃つと脱衣する魔法）
+    {
+        id: 'magic_force_strip_attack', // 任意のID
+        name: '解放の魔弾',
+        type: 'skill_custom',
+        cost: 3,
+        desc: '服を脱ぎ捨て、そのエネルギーで特大ダメージを与える',
+        effect: (user, target, battle) => { // 第3引数 battle が必要
+            
+            // ▼ 追加: 強制脱衣処理と演出テキストの取得
+            // BattleSystem側のメソッドを呼び出す
+            const stripText = battle.processForceStrip(); 
+            
+            // ダメージ計算 (脱衣状態なら威力アップなどの処理も可能)
+            let dmg = Math.floor(user.int * 3.0);
+            target.takeDamage(dmg);
+
+            let msg = "";
+            // 脱衣演出があった場合はメッセージに追加
+            if (stripText) {
+                msg += "服を代償に魔力を解放！ "; 
+            } else {
+                msg += "肌で感じる魔力を収束して発射！ ";
+            }
+
+            msg += `${dmg}のダメージ！`;
+            return { msg: msg };
         }
     },
     // 6. 毒手
@@ -630,7 +698,30 @@ const ACCESSORY_EFFECTS = [
     { 
         id: 'bangle_magic', name: '叡智の腕輪', desc: 'INTが1.2倍になる', 
         type: 'stat_mult', stat: 'int', value: 1.2 
-    }
+    },    
+    // --- Chaos Synergy ---
+    { id: 'acc_chaos_reflector', name: '混沌の鏡', desc: '混沌抽選+3。自傷効果を敵へのダメージに反転する', type: 'chaos_reflector' },
+    { id: 'acc_chaos_greedy', name: '強欲の杯', desc: '手札上限-3。混沌抽選+5。抽選毎に最大HP20%回復', type: 'chaos_healer' },
+
+    // --- 戦闘開始時効果 ---
+    { id: 'acc_start_charge', name: '達人の鞘', desc: '戦闘開始時、必殺技が発動可能になる', type: 'start_charge' },
+
+    // --- 武器シナジー ---
+    { id: 'acc_syn_sword', name: '剣士の腕輪', desc: '剣装備時、必殺技の威力が2倍', type: 'weapon_syn_spec', wType: '剣' },
+    { id: 'acc_syn_axe', name: '剛斧のベルト', desc: '斧装備時、DEF+30%', type: 'weapon_syn_stat', wType: '斧', stat: 'def', val: 1.3 },
+    { id: 'acc_syn_katana', name: '侍のハチマキ', desc: '刀装備時、ATK+30%', type: 'weapon_syn_stat', wType: '刀', stat: 'atk', val: 1.3 },
+    { id: 'acc_syn_wand', name: '魔女の帽子', desc: '杖装備時、HP+20%・手札上限+1', type: 'weapon_syn_wand', wType: '杖' },
+    { id: 'acc_syn_book', name: '賢者の眼鏡', desc: '書装備時、INT+30%', type: 'weapon_syn_stat', wType: '書', stat: 'int', val: 1.3 },
+    { id: 'acc_syn_cannon', name: '砲撃手のゴーグル', desc: '魔導砲装備時、通常攻撃回数+2 / ダメージ-30%', type: 'weapon_syn_cannon', wType: '魔導砲' },
+    { id: 'acc_syn_shield', name: '守護者の紋章', desc: '盾装備時、戦闘開始後3ターンDEF+50%', type: 'weapon_syn_shield', wType: '大盾' },
+
+    // --- 防具シナジー ---
+    { id: 'acc_syn_armor', name: '騎士の勲章', desc: '鎧装備時、HPとDEF+20%', type: 'armor_syn_heavy', aType: '鎧' },
+    { id: 'acc_syn_robe', name: '魔導師のブローチ', desc: 'ローブ装備時、DEFとSPD+20%', type: 'armor_syn_robe', aType: 'ローブ' },
+    { id: 'acc_syn_symbol', name: '幻影のアンクレット', desc: '紋章装備時、回避率+15%', type: 'armor_syn_symbol', aType: '紋章' },
+
+    // --- 魔法陣シナジー ---
+    { id: 'acc_mc_boost', name: '増幅の水晶', desc: 'ステータス強化魔法陣の効果を2倍にする', type: 'mc_booster' }
 ];
 
 // 状態異常の種類定義
@@ -677,7 +768,7 @@ const STATUS_TYPES = {
     SHRINK: { 
         id: 'shrink', 
         name: '縮小', 
-        desc: 'ATK/DEFが低下する (最大3段階)' 
+        desc: 'ATKが低下、被ダメージが大幅に増加する (最大3段階)' 
     }
 };
 
@@ -1405,3 +1496,221 @@ const ACCESSORY_PROOF_OF_LIBERATION = {
     desc: '【常時脱衣】INT/SPD+50%UP。縮小以外の状態異常無効。',
     isLiberationProof: true 
 };
+
+// 魔法陣データ定義
+const MAGIC_CIRCLE_DATABASE = [
+    // --- ステータス強化系 ---
+    { id: 'mc_hp_up', name: '生命の魔法陣', desc: '最大HP+20%', type: 'stat_mult', stat: 'hp', value: 1.2 },
+    { id: 'mc_atk_up', name: '剛力の魔法陣', desc: 'ATK+20%', type: 'stat_mult', stat: 'atk', value: 1.2 },
+    { id: 'mc_def_up', name: '守護の魔法陣', desc: 'DEF+20%', type: 'stat_mult', stat: 'def', value: 1.2 },
+    { id: 'mc_int_up', name: '魔導の魔法陣', desc: 'INT+20%', type: 'stat_mult', stat: 'int', value: 1.2 },
+    { id: 'mc_spd_up', name: '疾風の魔法陣', desc: 'SPD+50%', type: 'stat_mult', stat: 'spd', value: 1.5 },
+    { id: 'mc_evasion', name: '幻影の魔法陣', desc: '回避率+10%', type: 'evasion_add', value: 10 },
+
+    // --- 縮小・INT強化系 (小人の留め針と競合) ---
+    { id: 'mc_shrink_int_1', name: '小人の魔法陣(Lv1)', desc: '縮小Lv1下限。INT+20%。(留め針優先)', type: 'shrink_int', minLevel: 1, intMult: 1.2 },
+    { id: 'mc_shrink_int_2', name: '小人の魔法陣(Lv2)', desc: '縮小Lv2下限。INT+40%。(留め針優先)', type: 'shrink_int', minLevel: 2, intMult: 1.4 },
+    { id: 'mc_shrink_int_3', name: '小人の魔法陣(Lv3)', desc: '縮小Lv3下限。INT+60%。(留め針優先)', type: 'shrink_int', minLevel: 3, intMult: 1.6 },
+
+    // --- ドロップ補正系 ---
+    { id: 'mc_loot_plus', name: '鍛冶の魔法陣', desc: 'ドロップする装備の補正値が+1される', type: 'loot_plus_mod', value: 1 },
+    { id: 'mc_rate_weapon', name: '剣の魔法陣', desc: '勝利時、武器のドロップ率アップ', type: 'drop_rate_mod', target: 'weapon' },
+    { id: 'mc_rate_armor', name: '盾の魔法陣', desc: '勝利時、防具のドロップ率アップ', type: 'drop_rate_mod', target: 'armor' },
+    { id: 'mc_rate_accessory', name: '指輪の魔法陣', desc: '勝利時、装飾品のドロップ率アップ', type: 'drop_rate_mod', target: 'accessory' },
+    { id: 'mc_rate_mc', name: '星の魔法陣', desc: '勝利時、魔法陣のドロップ率アップ', type: 'drop_rate_mod', target: 'magic_circle' },
+    { id: 'mc_win_card', name: 'カードの魔法陣', desc: '勝利時、20%で装備の代わりにカードを入手', type: 'win_card_loot', chance: 0.2 },
+    { id: 'mc_skip_floor', name: '転送の魔法陣', desc: '勝利時、10%で階層をさらに+1進む', type: 'win_skip_floor', chance: 0.1 },
+
+    // --- 戦闘開始時: 状態異常付与 ---
+    { id: 'mc_start_poison', name: '毒の魔法陣', desc: '戦闘開始時、自身が【毒】になる', type: 'battle_start_status', status: 'poison' },
+    { id: 'mc_start_confusion', name: '混沌の魔法陣', desc: '戦闘開始時、自身が【混乱】になる', type: 'battle_start_status', status: 'confusion' },
+    { id: 'mc_start_distraction', name: '忘却の魔法陣', desc: '戦闘開始時、自身が【放心】になる', type: 'battle_start_status', status: 'distraction' },
+    { id: 'mc_start_fear', name: '恐怖の魔法陣', desc: '戦闘開始時、自身が【恐怖】になる', type: 'battle_start_status', status: 'fear' },
+    { id: 'mc_start_petri', name: '石の魔法陣', desc: '戦闘開始時、自身が【石化】になる', type: 'battle_start_status', status: 'petrification' },
+    { id: 'mc_start_strip', name: '露出の魔法陣', desc: '戦闘開始時、自身が【脱衣】になる', type: 'battle_start_status', status: 'undressing' },
+    
+    // --- 戦闘開始時: 縮小操作 ---
+    { id: 'mc_start_shrink_plus', name: '縮小の魔法陣', desc: '戦闘開始時、縮小Lv+1', type: 'battle_start_shrink', value: 1 },
+    { id: 'mc_start_shrink_minus', name: '拡大の魔法陣', desc: '戦闘開始時、縮小Lv-1', type: 'battle_start_shrink', value: -1 },
+
+    // --- 戦闘開始時: その他 ---
+    { id: 'mc_start_barrier', name: '障壁の魔法陣', desc: '戦闘開始時、ATK50%分の防壁を獲得', type: 'start_barrier_atk', value: 0.5 },
+    { id: 'mc_start_heal', name: '治癒の魔法陣', desc: '戦闘開始時、HPが50%回復', type: 'start_heal', value: 0.5 },
+
+    // --- 特殊効果・デメリット ---
+    { id: 'mc_status_atk_plus', name: '逆境の魔法陣', desc: '状態異常中、通常攻撃回数+1', type: 'status_attack_plus' },
+    { id: 'mc_trade_regen', name: '代償の魔法陣', desc: '最大HP-50%、ターン終了時HP10%回復', type: 'trade_off_regen', hpMult: 0.5, regen: 0.1 },
+    { id: 'mc_discard', name: '忘却の魔法陣', desc: 'ターン終了時、手札をランダムに1枚捨てる', type: 'turn_end_discard' },
+    { id: 'mc_gamble_atk', name: '賭博の魔法陣', desc: '通常攻撃時、50%でダメ0、50%でダメ2倍', type: 'attack_gamble' },
+
+    // --- 武器シナジー ---
+    { id: 'mc_syn_sword', name: '剣聖の魔法陣', desc: '剣装備時、ATK+30%', type: 'weapon_synergy', wType: '剣', stats: { atkMult: 1.3 } },
+    { id: 'mc_syn_axe', name: '狂戦士の魔法陣', desc: '斧装備時、攻撃が確率でクリティカル(1.5倍)になる', type: 'weapon_synergy', wType: '斧', effect: 'critical' },
+    { id: 'mc_syn_katana', name: '侍の魔法陣', desc: '刀装備時、回避成功時にATK反撃', type: 'weapon_synergy', wType: '刀', effect: 'counter' },
+    { id: 'mc_syn_wand', name: '魔女の魔法陣', desc: '杖装備時、INT+50%/HP-10%/回避-10%', type: 'weapon_synergy', wType: '杖', stats: { intMult: 1.5, hpMult: 0.9, evasionAdd: -10 } },
+    { id: 'mc_syn_book', name: '賢者の魔法陣', desc: '書装備時、防壁がないなら20%で被ダメ0', type: 'weapon_synergy', wType: '書', effect: 'barrier_chance' },
+    { id: 'mc_syn_cannon', name: '砲手の魔法陣', desc: '魔導砲装備時、ATKとINT+20%', type: 'weapon_synergy', wType: '魔導砲', stats: { atkMult: 1.2, intMult: 1.2 } },
+    { id: 'mc_syn_shield', name: '城壁の魔法陣', desc: '盾装備時、DEF+30%、ターン終了時防壁1.2倍', type: 'weapon_synergy', wType: '大盾', stats: { defMult: 1.3 }, effect: 'shield_boost' },
+
+    // --- 装備なしシナジー ---
+    { id: 'mc_naked_atk', name: '野性の魔法陣', desc: '武器・防具未装備時、ATK/INT+100%', type: 'naked_synergy', mode: 'offensive' },
+    { id: 'mc_naked_def', name: '鉄皮の魔法陣', desc: '武器・防具未装備時、HP/DEF+100%', type: 'naked_synergy', mode: 'defensive' },
+    
+    // --- 完全ソロシナジー ---
+    { id: 'mc_solo_god', name: '孤高の魔法陣', desc: 'これ以外全未装備時、状態異常無効/HP.INT+200%/ATK.DEF-100%/手札+1', type: 'solo_synergy' },
+
+    // --- Chaos Synergy ---
+    { id: 'mc_chaos_free', name: '無秩序の魔法陣', desc: 'HP-30%。混沌抽選+3。混沌魔法のHP消費コストが0になる', type: 'chaos_cost_zero', stats: { hpMult: 0.7 } },
+    { id: 'mc_chaos_death', name: '終焉の魔法陣', desc: 'DEF-100%。混沌抽選+8。「何も起こらない」時、低確率で敵を即死させる', type: 'chaos_death_gamble', stats: { defMult: 0 } },
+];
+
+// ==========================================
+// 縮小化関連 (要: 縮小Lv > 0)
+// ==========================================
+CARD_DATABASE.push(
+    {
+        id: 'magic_shrink_grow_atk',
+        name: 'リトルパワー',
+        type: 'skill_custom',
+        cost: 1,
+        desc: '縮小化Lv-1。3ターンの間ATKが上昇(大)。(縮小化していないと不発)',
+        effect: (user, target) => {
+            if (user.shrinkLevel <= 0) return { msg: "縮小化していないため不発！" };
+            
+            user.shrinkLevel = Math.max(0, user.shrinkLevel - 1);
+            
+            user.addBuff({
+                type: 'stat_up',
+                buffStats: { atkScale: 0.5 }, // +50%
+                duration: 3,
+                name: '巨大化の余韻',
+                desc: 'ATK大幅上昇'
+            });
+            
+            return { msg: "体を戻し、溢れるエネルギーを攻撃力に変えた！" };
+        }
+    },
+    {
+        id: 'magic_shrink_barrier',
+        name: 'マナコクーン',
+        type: 'skill_custom',
+        cost: 2,
+        desc: '縮小化を全解除し、ATKとレベルに応じた防壁を獲得。(縮小化していないと不発)',
+        effect: (user, target) => {
+            if (user.shrinkLevel <= 0) return { msg: "縮小化していないため不発！" };
+            
+            const lv = user.shrinkLevel;
+            const barrierVal = Math.floor(user.atk * lv * 1.5); // ATK x Lv x 1.5
+            user.shrinkLevel = 0;
+            user.barrier = (user.barrier || 0) + barrierVal;
+            
+            return { msg: `縮小化を解除し、魔力の繭を展開！ 防壁+${barrierVal}` };
+        }
+    },
+    {
+        id: 'magic_shrink_heal',
+        name: 'メタボリズム',
+        type: 'skill_custom',
+        cost: 3,
+        desc: '縮小化を全解除し、HP大回復＆状態異常解除。(縮小化していないと不発)',
+        effect: (user, target) => {
+            if (user.shrinkLevel <= 0) return { msg: "縮小化していないため不発！" };
+            
+            const healVal = Math.floor(user.maxHp * 0.5); // 50%回復
+            user.shrinkLevel = 0;
+            user.heal(healVal);
+            
+            if (user.currentStatus) {
+                user.clearAllStatus();
+                return { msg: `代謝を活性化！ HP+${healVal}、状態異常を克服した！` };
+            }
+            return { msg: `代謝を活性化！ HP+${healVal}` };
+        }
+    },
+    {
+        id: 'magic_shrink_deep_dodge',
+        name: 'ミクロ回避',
+        type: 'skill_custom',
+        cost: 2,
+        desc: '縮小化Lv+1。次のターンまで回避率+100%。(縮小化していないと不発)',
+        effect: (user, target) => {
+            if (user.shrinkLevel <= 0) return { msg: "縮小化していないため不発！" };
+            
+            user.shrinkLevel = Math.min(3, user.shrinkLevel + 1);
+            
+            user.addBuff({
+                type: 'evasion_up',
+                val: 100,
+                duration: 1,
+                name: 'ミクロ回避',
+                desc: '回避率+100%'
+            });
+            
+            return { msg: "さらに小さくなり、攻撃の隙間に入り込んだ！ (回避率+100%)" };
+        }
+    },
+
+    // ==========================================
+    // 混沌 (Chaos)
+    // ==========================================
+    {
+        id: 'magic_chaos_1',
+        name: 'カオス・ワン',
+        type: 'skill_custom',
+        cost: 1,
+        desc: '何が起こるか分からない「混沌」の効果が1つ発生する',
+        effect: (user, target, battle) => {
+            battle.executeChaos(1);
+            return { msg: "混沌の扉が開く……！" };
+        }
+    },
+    {
+        id: 'magic_chaos_2',
+        name: 'カオス・ブラッド',
+        type: 'skill_custom',
+        cost: 0,
+        desc: 'HP5%を消費し、「混沌」の効果が2つ発生する',
+        effect: (user, target, battle) => {
+            const cost = Math.floor(user.maxHp * 0.05);
+            
+            // ▼ 追加: コスト踏み倒し判定
+            let payCost = true;
+            if (battle.equipment.magic_circle && battle.equipment.magic_circle.passive.type === 'chaos_cost_zero') {
+                payCost = false;
+            }
+
+            if (payCost) {
+                if (user.hp <= cost) return { msg: "HPが足りない！" };
+                user.takeDamage(cost);
+            } else {
+                // コストなし演出
+            }
+            
+            battle.executeChaos(2);
+            return { msg: payCost ? `血を代償に、より深い混沌を招く！ (HP-${cost})` : `魔法陣が代償を肩代わりした！ (コスト0)` };
+        }
+    },
+    {
+        id: 'magic_chaos_3',
+        name: 'カオス・アビス',
+        type: 'skill_custom',
+        cost: 0,
+        desc: 'HP10%を消費し、「混沌」の効果が3つ発生する',
+        effect: (user, target, battle) => {
+            const cost = Math.floor(user.maxHp * 0.10);
+
+            let payCost = true;
+            if (battle.equipment.magic_circle && battle.equipment.magic_circle.passive.type === 'chaos_cost_zero') {
+                payCost = false;
+            }
+
+            if (payCost) {
+                if (user.hp <= cost) return { msg: "HPが足りない！" };
+                user.takeDamage(cost);
+            }
+            
+            battle.executeChaos(3);
+            return { msg: payCost ? `命を削り、深淵の混沌を解き放つ！ (HP-${cost})` : `魔法陣が代償を飲み込んだ！ (コスト0)` };
+        }
+    }
+);
