@@ -703,6 +703,21 @@ const ACCESSORY_EFFECTS = [
     { id: 'acc_chaos_reflector', name: '混沌の鏡', desc: '混沌抽選+3。自傷効果を敵へのダメージに反転する', type: 'chaos_reflector' },
     { id: 'acc_chaos_greedy', name: '強欲の杯', desc: '手札上限-3。混沌抽選+5。抽選毎に最大HP20%回復', type: 'chaos_healer' },
 
+    // --- 膨張関連 ---
+    {
+        id: 'acc_balloon_guard',
+        name: '風船の護符',
+        desc: '膨張状態のとき、被ダメージを30%軽減する',
+        type: 'expansion_dmg_cut',
+        value: 0.7 // 被ダメ倍率
+    },
+    {
+        id: 'acc_growth_striker',
+        name: '巨人の指輪',
+        desc: '膨張Lv×25%の確率で、通常攻撃がクリティカル(1.5倍)になる',
+        type: 'expansion_crit'
+    },
+
     // --- 戦闘開始時効果 ---
     { id: 'acc_start_charge', name: '達人の鞘', desc: '戦闘開始時、必殺技が発動可能になる', type: 'start_charge' },
 
@@ -762,6 +777,13 @@ const STATUS_TYPES = {
         name: '脱衣', 
         img: 'Fairy_undressing.png', 
         desc: 'DEFが0になる (戦闘終了まで)' 
+    },
+    EXPANSION: { 
+        id: 'expansion', 
+        name: '膨張', 
+        // 既存のアイコンがあればそれを、なければ脱衣などのアイコンを流用
+        img: 'Fairy_undressing.png', 
+        desc: '肉体が成長し能力が変化する。ATK増/SPD減。脱衣扱いとなり、他状態異常を無効化する。' 
     },
 
     // --- Special Status (別枠管理) ---
@@ -970,6 +992,15 @@ const FAIRY_DIALOGUE_DATA = {
         "3回も小さくなったら、もう虫のエサになっちゃいそうです……。踏まれる前に戻らないと！",
         "体が縮むと、力も出ないし守りも弱いし……。小さくて可愛いのは良いんですけど、冒険には不向きですね。",
         "豆粒サイズになったら、敵の靴の裏しか見えなくなっちゃいます。そんな最期は嫌ですよぉ！"
+    ],
+    // 膨張: ATK増/SPD減/脱衣扱い/他状態異常無効
+    talk_expansion: [
+        "体が急に大人みたいに成長して……力がみなぎってくる感覚は凄いんです。でも、体が重くてドスドス歩くことになっちゃうのは、妖精としてどうなんでしょう？",
+        "膨張すると……その、お洋服がサイズアウトして弾け飛んじゃうのが一番の問題です！ いくら攻撃力が上がっても、あんな破廉恥な姿で戦うなんて……うぅ、思い出すだけで顔から火が出そうです。",
+        "あの状態だと、お肌がパンと張ってて毒も麻痺も弾き返しちゃうんです。ある意味無敵ですけど……体が重くて攻撃も避けられないので、まさに「肉を切らせて骨を断つ」ですね。",
+        "うぅ……あんなに胸やお尻が大きくなっちゃうなんて。足元が見えなくて怖かったですし、動くたびにボヨンボヨンって……あぁもう、忘れてくださいっ！",
+        "服が弾け飛ぶのも恥ずかしいですけど、その……中身が、すごく主張してくるのが……。普段の私とは比べ物にならないくらい「大人」すぎて、鏡を見るのも無理でした……。",
+        "あそこまで育っちゃうと、隠そうとしても手で隠しきれないんです。指の隙間から溢れちゃう感じで……。魔力の副作用って、本当にえっちですよね……。"
     ],
 
     // --- 特殊リザルト：露出狂の目覚め (Exhibitionist Awakening) ---
@@ -1562,6 +1593,27 @@ const MAGIC_CIRCLE_DATABASE = [
     // --- Chaos Synergy ---
     { id: 'mc_chaos_free', name: '無秩序の魔法陣', desc: 'HP-30%。混沌抽選+3。混沌魔法のHP消費コストが0になる', type: 'chaos_cost_zero', stats: { hpMult: 0.7 } },
     { id: 'mc_chaos_death', name: '終焉の魔法陣', desc: 'DEF-100%。混沌抽選+8。「何も起こらない」時、低確率で敵を即死させる', type: 'chaos_death_gamble', stats: { defMult: 0 } },
+
+    // --- 膨張関連 ---
+    {
+        id: 'mc_auto_expand',
+        name: '育成の魔法陣',
+        desc: 'ターン終了時、脱衣状態なら膨張Lv+1',
+        type: 'auto_expand'
+    },
+    {
+        id: 'mc_expand_multi_hit',
+        name: '千手観音の魔法陣',
+        desc: '通常攻撃回数が膨張Lv分だけ追加される',
+        type: 'expansion_multi_hit'
+    },
+    {
+        id: 'mc_prevent_expansion',
+        name: '抑制の魔法陣',
+        desc: '脱衣時、回避率+20%。ただし膨張状態にならなくなる',
+        type: 'prevent_expansion',
+        evasionAdd: 20
+    }
 ];
 
 // ==========================================
@@ -1711,6 +1763,118 @@ CARD_DATABASE.push(
             
             battle.executeChaos(3);
             return { msg: payCost ? `命を削り、深淵の混沌を解き放つ！ (HP-${cost})` : `魔法陣が代償を飲み込んだ！ (コスト0)` };
+        }
+    },
+
+    // ==========================================
+    // 膨張 (Expansion)
+    // ==========================================
+    // 1. エクスパンション・ボルト (INT攻撃 + 膨張/脱衣)
+    {
+        id: 'magic_expand_bolt',
+        name: 'エクスパンション・ボルト',
+        type: 'skill_custom',
+        cost: 1,
+        desc: 'INTダメージ。【脱衣/膨張】なら膨張Lv+1。それ以外なら【脱衣】になる',
+        effect: (user, target, battle) => {
+            const dmg = Math.floor(user.int * 1.5);
+            target.takeDamage(dmg);
+
+            if (user.hasStatus('undressing')) {
+                battle.processExpansion(1);
+                return { msg: `魔力が身体に充填される！ ${dmg}ダメージ！` };
+            } else {
+                battle.processForceStrip();
+                return { msg: `衣服を弾き飛ばして攻撃！ ${dmg}ダメージ！` };
+            }
+        }
+    },
+    // 2. マッシブ・ブレイク (ATK防御無視 + 膨張)
+    {
+        id: 'skill_massive_break',
+        name: 'マッシブ・ブレイク',
+        type: 'skill_custom',
+        cost: 2,
+        desc: '防御無視ダメージ。【脱衣/膨張】なら膨張Lv+1。(それ以外は不発)',
+        effect: (user, target, battle) => {
+            if (!user.hasStatus('undressing')) return { msg: "脱衣状態ではないため力が十分に出ない……" };
+
+            const dmg = Math.floor(user.atk * 1.5);
+            target.takeDamage(dmg, true); // true=防御無視
+            battle.processExpansion(1);
+            return { msg: `質量を乗せた重い一撃！ ${dmg}ダメージ！` };
+        }
+    },
+    // 3. 転換：縮小→膨張
+    {
+        id: 'magic_convert_shrink_to_grow',
+        name: '反転術式：膨張',
+        type: 'skill_custom',
+        cost: 0,
+        desc: '縮小Lvを全て解除し、その分だけ膨張Lvを加算する',
+        effect: (user, target, battle) => {
+            if (user.shrinkLevel <= 0) return { msg: "縮小化していない！" };
+            const lv = user.shrinkLevel;
+            user.shrinkLevel = 0;
+            if (!user.hasStatus('undressing')) battle.processForceStrip();
+            battle.processExpansion(lv);
+            return { msg: `縮小の呪いを反転させ、肉体を成長させた！` };
+        }
+    },
+    // 4. 転換：膨張→縮小
+    {
+        id: 'magic_convert_grow_to_shrink',
+        name: '反転術式：縮小',
+        type: 'skill_custom',
+        cost: 0,
+        desc: '膨張Lvを全て解除し、その分だけ縮小Lvを加算する',
+        effect: (user, target, battle) => {
+            if (user.expansionLevel <= 0) return { msg: "膨張していない！" };
+            const lv = user.expansionLevel;
+            user.expansionLevel = 0; // 一旦0に
+            battle.updateCharacterSprite(); // 解除更新
+            if (!user.hasStatus('undressing')) battle.processForceStrip();
+            
+            user.shrinkLevel = Math.min(3, user.shrinkLevel + lv);
+            return { msg: `過剰なエネルギーを圧縮し、体を小さくした！` };
+        }
+    },
+    // 5. 肉体活性
+    {
+        id: 'skill_body_activate',
+        name: '肉体活性',
+        type: 'skill_custom',
+        cost: 1,
+        desc: '膨張Lv × ATK30%分の防壁とHP回復を行う',
+        effect: (user, target, battle) => {
+            const lv = user.expansionLevel;
+            if (lv <= 0) return { msg: "膨張していないため効果が薄い……" };
+
+            const val = Math.floor(user.atk * lv * 0.3);
+            user.heal(val);
+            user.barrier = (user.barrier || 0) + val;
+            return { msg: `活性化した肉体が再生する！ HP+${val}, 防壁+${val}` };
+        }
+    },
+    // 6. ギガント・バースト (フィニッシャー)
+    {
+        id: 'skill_gigant_burst',
+        name: 'ギガント・バースト',
+        type: 'skill_custom',
+        cost: 3,
+        desc: '膨張を全解除し、ATK特大ダメージを与える',
+        effect: (user, target, battle) => {
+            if (user.expansionLevel <= 0) return { msg: "膨張していない！" };
+            
+            const lv = user.expansionLevel;
+            const dmg = Math.floor(user.atk * (2.0 + lv)); // 倍率: 3倍, 4倍, 5倍
+            
+            user.expansionLevel = 0;
+            battle.updateCharacterSprite();
+            // 脱衣は維持(仕様)
+
+            target.takeDamage(dmg);
+            return { msg: `膨張したエネルギーを一気に放出！ ${dmg}のダメージ！` };
         }
     }
 );

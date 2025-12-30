@@ -30,6 +30,7 @@ class Unit {
         this.counterStance = null; // カウンター待機状態
         this.minShrinkLevel = 0;   // 縮小化の下限
         this.dungeonBonus = { atk: 0, int: 0, dmgRate: 1.0 }; // ダンジョン内ボーナス
+        this.expansionLevel = 0; // 膨張レベル (0:なし, 1~3:段階)
 
         // 統計データ (Stats Tracking)
         this.runStats = {
@@ -106,6 +107,14 @@ class Unit {
     }
 
     addStatus(statusId, duration = 3) {
+        // ▼ 追加: 膨張中は、縮小(shrink)以外の状態異常を無効化
+        if (this.isPlayer && this.expansionLevel > 0) {
+            if (statusId !== 'shrink') {
+                // 無効化
+                return;
+            }
+        }
+
         // ▼ 変更: 解放の証装備中は、縮小(shrink)以外の全ステータス変化を無効化する
         // (hasStatusで偽装するため、undressingすらも付与する必要がない)
         if (this.isPlayer && this.isLiberated) {
@@ -135,6 +144,11 @@ class Unit {
     }
 
     hasStatus(statusId) {
+        // ▼ 追加: 膨張中は 'undressing' (脱衣) を常に true とする
+        if (this.isPlayer && this.expansionLevel > 0 && statusId === 'undressing') {
+            return true;
+        }
+
         // ▼ 追加: 解放の証(isLiberated)装備中は、'undressing' は常にtrueとして扱う
         if (this.isPlayer && this.isLiberated && statusId === 'undressing') {
             return true;

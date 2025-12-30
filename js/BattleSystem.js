@@ -184,6 +184,7 @@ class BattleSystem {
                 flags: this.player.flags,
                 shrinkLevel: this.player.shrinkLevel,
                 minShrinkLevel: this.player.minShrinkLevel,
+                expansionLevel: this.player.expansionLevel,
                 currentStatus: this.player.currentStatus ? { id: this.player.currentStatus.id, turns: this.player.statusTurn } : null,
                 buffs: this.player.buffs,
                 battleStatsMod: this.player.battleStatsMod || { atk: 0, def: 0, int: 0, spd: 0 },
@@ -916,6 +917,37 @@ class BattleSystem {
         this.recalcStats();
     }
 
+    // 膨張レベルの操作 (amount: 増加量または減少量)
+    // return: 実際に変化したか
+    processExpansion(amount) {
+        // 1. 増加の場合の防止チェック
+        if (amount > 0) {
+            // 魔法陣: 脱衣時回避+20% & 膨張無効 (mc_prevent_expansion)
+            if (this.equipment.magic_circle && this.equipment.magic_circle.passive && this.equipment.magic_circle.passive.type === 'prevent_expansion') {
+                this.log("魔法陣が肉体の変質を抑制した！(膨張無効)");
+                return false;
+            }
+        }
+
+        const oldLv = this.player.expansionLevel;
+        this.player.expansionLevel = Math.max(0, Math.min(3, this.player.expansionLevel + amount));
+
+        if (this.player.expansionLevel !== oldLv) {
+            if (this.player.expansionLevel > oldLv) {
+                this.log(`肉体が膨張した！ (Lv${this.player.expansionLevel})`);
+                
+                // ▼ 追加: 冒険譚への登録 (初めて膨張した時に記録)
+                this.registerCollection('statuses', 'expansion');
+            } else {
+                this.log(`膨張が収まった…… (Lv${this.player.expansionLevel})`);
+            }
+            this.updateCharacterSprite(); // 立ち絵更新
+            this.updateStatsUI();
+            return true;
+        }
+        return false;
+    }
+
     // アイテム装備処理
     equipItem(slot, inventoryIndex) {
         const item = this.permInventory[inventoryIndex];
@@ -1208,6 +1240,13 @@ class BattleSystem {
         totalSpd = Math.floor(totalSpd * statMultipliers.spd);
         totalMaxHp = Math.floor(totalMaxHp * statMultipliers.hp);
         
+        // ▼ 追加: 膨張による補正 (Lv毎に ATK+30%, SPD-30%)
+        if (this.player.expansionLevel > 0) {
+            const level = this.player.expansionLevel;
+            totalAtk = Math.floor(totalAtk * (1.0 + (0.3 * level)));
+            totalSpd = Math.floor(totalSpd * Math.max(0.1, (1.0 - (0.3 * level)))); // 最低10%保証
+        }
+
         // [拡張] 解放の証 (Proof of Liberation)
         if (this.equipment.accessory && this.equipment.accessory.isLiberationProof) {
             totalInt = Math.floor(totalInt * 1.5);
@@ -2460,6 +2499,13 @@ class BattleSystem {
         const isLiberated = this.equipment.accessory && this.equipment.accessory.isLiberationProof;
         const safePct = (typeof hpPct === 'number') ? hpPct : 100;
 
+        // 0. 膨張状態 (最優先)
+        if (this.player.expansionLevel > 0) {
+            // updateCharacterSprite で設定された画像を維持するため、ここでは何もしないか、
+            // あるいは updateCharacterSprite を呼び出す
+            this.updateCharacterSprite();
+            return; // 膨張時は表情差分なし（または専用画像に含まれる）としてリターン
+        }
         // 1. 解放の証（覚醒）モード
         if (isLiberated) {
             if (safePct < 25) {
@@ -2857,6 +2903,11 @@ class BattleSystem {
                             this.log("逆境の力で攻撃回数増加！");
                         }
                     }
+
+                    // 膨張: 攻撃回数増加 (千手観音)
+                    if (this.equipment.magic_circle && this.equipment.magic_circle.passive && this.equipment.magic_circle.passive.type === 'expansion_multi_hit') {
+                        hitCount += this.player.expansionLevel;
+                    }
                     
                     // 攻撃回数分ループ
                     for (let i = 0; i < hitCount; i++) {
@@ -2886,6 +2937,15 @@ class BattleSystem {
                                     dmg = Math.floor(dmg * 1.5);
                                     this.log("クリティカルヒット！");
                                 }
+                            }
+                        }
+
+                        // 膨張: クリティカル (巨人の指輪)
+                        if (this.equipment.accessory && this.equipment.accessory.passive && this.equipment.accessory.passive.type === 'expansion_crit') {
+                            const chance = this.player.expansionLevel * 0.25;
+                            if (Math.random() < chance) {
+                                dmg = Math.floor(dmg * 1.5);
+                                this.log("巨人の力でクリティカル！");
                             }
                         }
 
@@ -3288,6 +3348,14 @@ class BattleSystem {
                 }
             }
 
+            // ▼ 追加: 魔法陣効果 (ターン終了時に膨張)
+            if (this.equipment.magic_circle && this.equipment.magic_circle.passive && this.equipment.magic_circle.passive.type === 'auto_expand') {
+                // 脱衣状態(膨張含む)ならレベルアップ
+                if (this.player.hasStatus('undressing')) {
+                    this.processExpansion(1);
+                }
+            }
+
             // [拡張] 汎用ターン終了時効果 (ENDGAME_ITEMS)
             Object.values(this.equipment).forEach(item => {
                 if (item && item.passive) {
@@ -3419,6 +3487,12 @@ class BattleSystem {
                 // [拡張] バリア処理
                 const bRes = this.player.applyBarrier(rawDmg);
                 rawDmg = bRes.damage;
+
+                // 膨張: 被ダメージ軽減 (風船の護符)
+                if (this.equipment.accessory && this.equipment.accessory.passive && this.equipment.accessory.passive.type === 'expansion_dmg_cut' && this.player.expansionLevel > 0) {
+                    rawDmg = Math.floor(rawDmg * 0.7);
+                }
+
                 if (bRes.absorbed > 0) this.log(`(バリアが ${bRes.absorbed} ダメージ軽減)`);
 
                 let dmg = this.player.takeDamage(rawDmg);
@@ -3495,6 +3569,7 @@ class BattleSystem {
         this.ui.cardList.innerHTML = ''; // 手札表示をクリア
 
         // 戦闘終了時の状態異常リカバリー (縮小以外を解除)
+        this.player.expansionLevel = 0; // 膨張解除
         this.player.currentStatus = null;
         this.updateStatsUI();
         this.player.buffs = []; // バフ全解除
@@ -4186,6 +4261,37 @@ class BattleSystem {
         }
     }
 
+    updateCharacterSprite() {
+        const imgEl = this.ui.playerImg;
+        if (!imgEl) return;
+
+        let src = FACE_IMAGES.NORMAL; // デフォルト
+
+        // 1. 膨張状態 (最優先)
+        if (this.player.expansionLevel > 0) {
+            const lv = this.player.expansionLevel;
+            if (this.player.isLiberated) {
+                // 解放脱衣ベース (指定: Fairy_undressing_growth)
+                src = `Fairy_undressing_growth${lv}.png`;
+            } else {
+                // 通常脱衣ベース (指定: fairy_liberation_growth)
+                src = `fairy_liberation_growth${lv}.png`;
+            }
+        }
+        // 2. 解放 or 脱衣状態
+        else if (this.player.isLiberated || this.player.hasStatus('undressing')) {
+             // 既存の脱衣差分があればここで分岐
+             src = this.player.isLiberated ? "Fairy_liberated.png" : "Fairy_stripped.png"; 
+             // ※既存ファイル名に合わせて調整してください
+        }
+        // 3. 通常 (updatePlayerExpressionでHPに応じた表情がセットされるため、ここではベース画像があればセット)
+        // ただし、updatePlayerExpressionが毎フレーム呼ばれるわけではない場合、ここでセットが必要
+        // ここでは updatePlayerExpression に任せるか、強制的に上書きするか。
+        // 膨張時は専用画像を使うため、ここでセットして updatePlayerExpression 側で上書きされないように制御が必要かも知れない
+        
+        if (this.player.expansionLevel > 0) imgEl.src = src;
+    }
+
     /**
      * 強制脱衣処理 (Magic Overload Strip)
      * 魔法の暴走や副作用により、強制的に脱衣状態にする
@@ -4363,6 +4469,7 @@ class BattleSystem {
             pool = pool.concat(FAIRY_DIALOGUE_DATA.talk_petrified || []);
             pool = pool.concat(FAIRY_DIALOGUE_DATA.talk_stripped || []);
             pool = pool.concat(FAIRY_DIALOGUE_DATA.talk_shrink_general || []);
+            pool = pool.concat(FAIRY_DIALOGUE_DATA.talk_expansion || []);
 
             // High ATK (脳筋)
             if (this.player.atk >= this.player.int * 2.5) {
