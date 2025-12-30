@@ -14,6 +14,7 @@ class Unit {
         this.isBoss = isBoss; // ボスフラグ
         this.isPlayer = isPlayer; // プレイヤーかどうかのフラグ
         this.isDefending = false; // 防御状態フラグ
+        this.isLiberated = false; // 解放の証フラグ
         this.buffs = []; // バフ管理配列
         this.skipTurn = false; // 行動スキップフラグ
         this.barrier = 0; // ダメージ軽減バリア (耐久値)
@@ -95,12 +96,27 @@ class Unit {
     addBuff(buff) {
         // durationプロパティをremainingとして設定
         if (buff.duration) {
-            buff.remaining = buff.duration;
+            // プレイヤーの場合、発動ターン消費分を補填して +1 する
+            let bonus = (this.isPlayer) ? 1 : 0;
+            // ただし、永続バフ(50ターン以上など)はそのままにする
+            if (buff.duration >= 50) bonus = 0;
+            buff.remaining = buff.duration + bonus;
         }
         this.buffs.push(buff);
     }
 
     addStatus(statusId, duration = 3) {
+        // ▼ 変更: 解放の証装備中は、縮小(shrink)以外の全ステータス変化を無効化する
+        // (hasStatusで偽装するため、undressingすらも付与する必要がない)
+        if (this.isPlayer && this.isLiberated) {
+            if (statusId !== 'shrink') {
+                // ここで無効化
+                // BattleSystem側でメッセージを出したい場合は、戻り値で成否を返しても良い
+                console.log("解放の証により状態異常を無効化");
+                return;
+            }
+        }
+
         const status = STATUS_TYPES[statusId.toUpperCase()];
         if (status) {
             // ▼ 追加: 脱衣カウントの更新 ▼
@@ -119,6 +135,12 @@ class Unit {
     }
 
     hasStatus(statusId) {
+        // ▼ 追加: 解放の証(isLiberated)装備中は、'undressing' は常にtrueとして扱う
+        if (this.isPlayer && this.isLiberated && statusId === 'undressing') {
+            return true;
+        }
+
+        // 既存の判定
         return this.currentStatus && this.currentStatus.id === statusId;
     }
 

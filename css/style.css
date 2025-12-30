@@ -210,8 +210,8 @@ body {
 }
 
 /* クリック時のへこみ演出 */
-#player-area.interactive:active {
-    transform: scale(0.98);
+#player-area.interactive:active #player-img {
+    transform: translateX(-50%) translateY(var(--fairy-y, 0px)) scale(calc(var(--fairy-scale, 1) * 0.95));
 }
 
 /* 拠点でのみクリック可能にするクラス */
@@ -228,9 +228,9 @@ body {
 }
 
 @keyframes fairyBounce {
-    0% { transform: translateX(-50%) translateY(0) scale(1); }
-    50% { transform: translateX(-50%) translateY(-6px) scale(1.02); }
-    100% { transform: translateX(-50%) translateY(0) scale(1); }
+    0% { transform: translateX(-50%) translateY(var(--fairy-y, 0px)) scale(var(--fairy-scale, 1)); }
+    50% { transform: translateX(-50%) translateY(calc(var(--fairy-y, 0px) - 6px)) scale(calc(var(--fairy-scale, 1) * 1.02)); }
+    100% { transform: translateX(-50%) translateY(var(--fairy-y, 0px)) scale(var(--fairy-scale, 1)); }
 }
 
 /* --- 吹き出し (Speech Bubble) --- */
@@ -546,3 +546,21 @@ body {
     color: #fff;
     transform: scale(0.95);
 }
+
+/* --- Status Badge --- */
+.status-badge {
+    display: inline-block;
+    padding: 2px 6px;
+    font-size: 10px;
+    font-weight: bold;
+    border-radius: 8px;
+    margin-top: 4px;
+    color: white;
+}
+.status-undressing { background-color: #e74c3c; }
+.status-poison { background-color: #9b59b6; }
+.status-confusion { background-color: #f39c12; }
+.status-distraction { background-color: #3498db; }
+.status-fear { background-color: #34495e; }
+.status-petrification { background-color: #7f8c8d; }
+.status-shrink { background-color: #1abc9c; }

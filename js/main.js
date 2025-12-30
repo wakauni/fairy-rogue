@@ -6,11 +6,18 @@ window.onload = function() {
     if (localStorage.getItem('fairy_rogue_save_v1')) {
         console.log("セーブデータを検知。自動ロードを実行します。");
         if (game.loadGame()) {
+            game.isSaveEnabled = true;
+            console.log("ロード完了: セーブ機能を有効化しました");
             return;
         }
         // ロード失敗時はデータを削除して初期化
         localStorage.removeItem('fairy_rogue_save_v1');
     }
+
+    // ニューゲーム開始
+    console.log("ニューゲームを開始します");
+    game.isSaveEnabled = true;
+    game.saveGame();
 };
 
 // アイテム取得・復元用関数
@@ -61,6 +68,7 @@ function getItemById(itemId) {
                 const mainVal = Math.floor(power * wType.mod);
                 if (wType.stat === 'atk') item.atk = mainVal;
                 if (wType.stat === 'int') item.int = mainVal;
+                if (wType.stat === 'def') item.def = mainVal;
                 if (wType.sub) Object.keys(wType.sub).forEach(k => item[k] = (item[k]||0) + Math.floor(power * wType.sub[k] * (k==='hp'?5:1)));
             } else if (type === 'armor') {
                 const aType = ARMOR_TYPES[subKey];
