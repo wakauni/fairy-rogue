@@ -21,6 +21,7 @@ window.onload = function() {
 };
 
 // アイテム取得・復元用関数
+// アイテム取得・復元用関数
 function getItemById(itemId) {
     if (!itemId) return null;
 
@@ -35,7 +36,6 @@ function getItemById(itemId) {
     // 3. アクセサリー効果 (IDが一致する場合)
     master = ACCESSORY_EFFECTS.find(e => e.id === itemId);
     if (master) {
-        // アクセサリーとして構築して返す
         return {
             id: master.id,
             name: master.name,
@@ -45,40 +45,79 @@ function getItemById(itemId) {
         };
     }
 
-    // 4. 自動生成アイテム (gen_TYPE_TIER_SUB)
+    // 4. 自動生成アイテム (gen_TYPE_TIER_SUB... )
     if (itemId.startsWith('gen_')) {
         const parts = itemId.split('_');
-        // parts[0]=gen, parts[1]=type, parts[2]=tierIndex, parts[3]=subtypeKey
+        // 新ID形式: gen_TYPE_TIER_SUBTYPE_SUBKEY (length 5)
+        // 旧ID形式: gen_TYPE_TIER_SUBKEY (length 4)
+
         if (parts.length >= 4) {
             const type = parts[1];
             const tierIndex = parseInt(parts[2]);
-            const subKey = parts[3];
             
-            const tier = MATERIAL_TIERS[tierIndex];
-            if (!tier) return null;
+            let subType = 'bal'; // デフォルト (旧データはバランス型として扱う)
+            let subKey = '';
 
-            let item = { id: itemId, type: type, level: (tierIndex + 1) * 5 }; // レベルは概算
-            const power = tier.power;
+            if (parts.length === 5) {
+                // 新しい形式 (物理/魔法/バランス)
+                subType = parts[3];
+                subKey = parts[4];
+            } else {
+                // 古い形式 (互換性維持)
+                subKey = parts[3];
+            }
+            
+            // 階層データ取得
+            const tierGroup = MATERIAL_TIERS[tierIndex];
+            if (!tierGroup) return null;
+
+            // サブタイプ(bal/phy/mag)のデータを取得。旧データで合わない場合はbalを使用
+            const matData = tierGroup[subType] || tierGroup['bal'];
+            if (!matData) return null;
+
+            let item = { id: itemId, type: type, level: (tierIndex + 1) * 5 };
+            const power = matData.power;
+            const bias = matData.bias || { atk:1, def:1, int:1, spd:1 }; // バイアス値
 
             if (type === 'weapon') {
                 const wType = WEAPON_TYPES[subKey];
                 if (!wType) return null;
-                item.name = `${tier.name}${wType.name}`;
+                
+                item.name = `${matData.name}${wType.name}`;
                 item.atk = 0; item.int = 0; item.def = 0; item.hp = 0; item.spd = 0;
+                
                 const mainVal = Math.floor(power * wType.mod);
-                if (wType.stat === 'atk') item.atk = mainVal;
-                if (wType.stat === 'int') item.int = mainVal;
-                if (wType.stat === 'def') item.def = mainVal;
-                if (wType.sub) Object.keys(wType.sub).forEach(k => item[k] = (item[k]||0) + Math.floor(power * wType.sub[k] * (k==='hp'?5:1)));
+                
+                // バイアスを適用してステータス設定
+                if (wType.stat === 'atk') item.atk = Math.floor(mainVal * bias.atk);
+                if (wType.stat === 'int') item.int = Math.floor(mainVal * bias.int);
+                if (wType.stat === 'def') item.def = Math.floor(mainVal * bias.def);
+                
+                if (wType.sub) {
+                    Object.keys(wType.sub).forEach(k => {
+                        let val = Math.floor(power * wType.sub[k]);
+                        if (k === 'hp') val *= 5;
+                        if (bias[k]) val = Math.floor(val * bias[k]);
+                        item[k] = (item[k]||0) + val;
+                    });
+                }
             } else if (type === 'armor') {
                 const aType = ARMOR_TYPES[subKey];
                 if (!aType) return null;
-                item.name = `${tier.name}${aType.name}`;
+                
+                item.name = `${matData.name}${aType.name}`;
                 item.atk = 0; item.int = 0; item.def = 0; item.hp = 0; item.spd = 0;
+                
                 const isModObj = (typeof aType.mod === 'object');
                 aType.main.forEach(k => {
                     let m = isModObj ? (aType.mod[k] || aType.mod.others || 1.0) : aType.mod;
-                    item[k] = (item[k]||0) + Math.floor(power * m * (k==='hp'?5:1));
+                    let val = Math.floor(power * m);
+                    if (k === 'hp') val *= 5;
+                    
+                    // バイアス適用
+                    if (bias[k]) val = Math.floor(val * bias[k]);
+                    
+                    item[k] = (item[k]||0) + val;
                 });
             }
             return item;
@@ -99,5 +138,4 @@ function getItemById(itemId) {
         }
     }
     return null;
-}
-// main.js の末尾に追加
+}// main.js の末尾に追加

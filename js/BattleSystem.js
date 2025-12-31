@@ -68,6 +68,7 @@ class BattleSystem {
         this.lastActionTime = Date.now();
         this.restCount = 3; // 休憩回数
         this.clickStreak = 0; // 連打カウンター
+        this.isClickLocked = false; // クリック連打イベントのリセット演出用ロック
 
         // ▼ 追加: ログ管理用変数
         this.logQueue = [];         // ログの待ち行列
@@ -903,7 +904,11 @@ showHome() {
         
         // 報酬の付与 (復元後のインベントリに追加)
         if (rewardItem) {
-            this.permInventory.push(rewardItem);
+            if (rewardItem.cost !== undefined) {
+                this.cardPool.push(rewardItem);
+            } else {
+                this.permInventory.push(rewardItem);
+            }
             // トーストで通知（少し遅らせて表示すると分かりやすい）
             setTimeout(() => {
                 this.showToast(`✨ ローグライク報酬: ${rewardItem.name} を獲得！`, "success");
@@ -1076,8 +1081,16 @@ showHome() {
         if (!this.player) return;
 
         // --- 1. 下限の強制適用 ---
-        const minShrink = this.getMinShrinkLevel();
-        const minExp = this.getMinExpansionLevel();
+        let minShrink = this.getMinShrinkLevel();
+        let minExp = this.getMinExpansionLevel();
+        
+        // ▼ 追加: 固定の魔法陣判定
+        const mc = this.equipment.magic_circle;
+        const isFixedMc = (mc && mc.id === 'mc_click_fixed');
+        if (isFixedMc) {
+            minShrink = 3;
+            minExp = 3;
+        }
 
         if ((this.player.shrinkLevel || 0) < minShrink) this.player.shrinkLevel = minShrink;
         if ((this.player.expansionLevel || 0) < minExp) this.player.expansionLevel = minExp;
@@ -1137,12 +1150,15 @@ showHome() {
         });
 
         // --- 4. 状態異常と変性計算 ---
-        if (this.player.hasStatus('undressing') && !ignoreStripPenalty) {
-            statMultipliers.def = 0; 
+        // ▼ 修正: 固定の魔法陣ならペナルティを無効化
+        if (!isFixedMc) {
+            if (this.player.hasStatus('undressing') && !ignoreStripPenalty) {
+                statMultipliers.def = 0; 
+            }
         }
 
         // 色欲コンボ
-        if (this.equipment.magic_circle && this.equipment.magic_circle.id === 'mc_lust') {
+        if (mc && mc.id === 'mc_lust') {
             const hasCombo = !!Object.values(this.equipment).find(item => 
                 item && (item.id === 'acc_lust_pendant' || item.id === 'acc_lust_liberation')
             );
@@ -1152,17 +1168,23 @@ showHome() {
 
         // 膨張/縮小による最終補正
         const expLv = this.player.expansionLevel || 0;
-        if (expLv === 4) { statMultipliers.atk *= 2.2; statMultipliers.spd *= 0.1; }
-        else if (expLv > 0) {
+        if (expLv > 0) {
             statMultipliers.atk *= (1.0 + 0.3 * expLv);
-            statMultipliers.spd *= Math.max(0.1, 1.0 - 0.3 * expLv);
+            if (expLv === 4) statMultipliers.atk *= 1.1;
+            
+            if (!isFixedMc) { // デメリット無効化
+                if (expLv === 4) statMultipliers.spd *= 0.1;
+                else statMultipliers.spd *= Math.max(0.1, 1.0 - 0.3 * expLv);
+            }
         }
 
         const shrinkLv = this.player.shrinkLevel || 0;
         if (shrinkLv > 0) {
             const s = SHRINK_STATS[`LV${shrinkLv}`];
             if (s) {
-                statMultipliers.atk *= s.atk;
+                if (!isFixedMc) { // デメリット無効化
+                    statMultipliers.atk *= s.atk;
+                }
                 statMultipliers.spd *= s.spdMult;
             }
         }
@@ -1175,6 +1197,13 @@ showHome() {
         this.player.spd = Math.floor((this.playerBaseStats.spd + addSpd) * statMultipliers.spd);
 
         if (this.player.hp > this.player.maxHp) this.player.hp = this.player.maxHp;
+
+        // --- 最終: 反転の魔法陣 (ATK/INT入替) ---
+        if (mc && mc.id === 'mc_click_swap') {
+            const temp = this.player.atk;
+            this.player.atk = this.player.int;
+            this.player.int = temp;
+        }
     }
 
     // --- 編成画面ロジック ---
@@ -1596,6 +1625,14 @@ showHome() {
         // generateLootを再利用したいが、depth依存なので一時的にdepthを偽装するか、専用ロジックを作る
         // ここでは generateSynthesizedItem を実装
         const newItem = this.generateSynthesizedItem(newDepth, avgPlus);
+
+        if (newItem.cost !== undefined) {
+            this.cardPool.push(newItem);
+            this.showToast(`合成変異！ 魔法カード ${newItem.name} になった！`, "success");
+        } else {
+            this.permInventory.push(newItem);
+            this.showToast(`合成成功！ ${newItem.name} を獲得！`, "success");
+        }
 
         this.permInventory.push(newItem);
         this.selectedSynthesisItems = [];
@@ -2714,6 +2751,23 @@ showHome() {
 
     // --- プレイヤーのターン開始処理 ---
     startPlayerTurn() {
+        // ▼ 追加: 淫魔のチョーカー効果
+        const acc = this.equipment.accessory;
+        if (acc && acc.id === 'acc_click_start') {
+            if (this.player.hasStatus('undressing') || this.player.isLiberated || this.player.expansionLevel > 0) {
+                if (this.player.expansionLevel < 4) {
+                    this.player.expansionLevel++;
+                    this.log("淫魔のチョーカーが反応し、体が膨らんだ！");
+                }
+            } else {
+                this.processForceStrip();
+                this.log("淫魔のチョーカーにより、服が弾け飛んだ！");
+            }
+            this.updateCharacterSprite();
+            this.recalcStats();
+            this.updateStatsUI();
+        }
+
         this.isPlayerTurn = true;
         this.player.isDefending = false; // 防御解除
         this.saveGame(); // ターン開始時セーブ
@@ -3655,6 +3709,22 @@ if (this.enemy && this.enemy.curse > 0) {
                 this.log(`${action.label}！ ${dmg} のダメージを受けた！`);
                 this.updateStatsUI();
             }
+
+            // ▼ 追加: マゾヒストガーター効果
+            const acc = this.equipment.accessory;
+            if (acc && acc.id === 'acc_click_dmg' && dmg > 0) { // ダメージを受けた場合
+                 if (this.player.hasStatus('undressing') || this.player.isLiberated || this.player.expansionLevel > 0) {
+                    if (this.player.expansionLevel < 4) {
+                        this.player.expansionLevel++;
+                        this.log("痛みを快感に変換し、さらに膨張した！");
+                    }
+                } else {
+                    this.processForceStrip();
+                    this.log("衝撃で服が破け散った！");
+                }
+                this.updateCharacterSprite();
+                this.recalcStats();
+            }
         } else if (action.type === 'defend') {
             this.enemy.isDefending = true;
             this.log("敵は身を固めている！(DEF UP)");
@@ -3946,16 +4016,15 @@ if (this.enemy && this.enemy.curse > 0) {
     }
 // BattleSystem.js - generateLoot メソッドの修正
 
-    // ドロップ生成ロジック
+// ドロップ生成ロジック
     generateLoot(isBoss = false) {
-        // ドロップ率の重み付け初期値
+        // ドロップ率の重み付け
         let weights = { weapon: 35, armor: 35, accessory: 15, magic_circle: 15 };
 
-        // 魔法陣によるレート補正
         if (this.equipment.magic_circle) {
             const mc = this.equipment.magic_circle.passive;
-            if (mc.type === 'drop_rate_mod') {
-                if (weights[mc.target]) weights[mc.target] += 50;
+            if (mc.type === 'drop_rate_mod' && weights[mc.target]) {
+                weights[mc.target] += 50;
             }
             if (mc.type === 'win_card_loot' && Math.random() < mc.chance) {
                 const card = CARD_DATABASE[Math.floor(Math.random() * CARD_DATABASE.length)];
@@ -3975,6 +4044,7 @@ if (this.enemy && this.enemy.curse > 0) {
 
         let item = { type: type, level: this.depth };
 
+        // ランク(Tier)決定
         const effectiveDepth = this.depth + (this.player.dropQualityBonus || 0);
         let tierIndex = 0;
         if (effectiveDepth >= 50) tierIndex = 5;
@@ -3983,27 +4053,44 @@ if (this.enemy && this.enemy.curse > 0) {
         else if (effectiveDepth >= 10) tierIndex = 2;
         else if (effectiveDepth >= 5) tierIndex = 1;
         
-        const tier = MATERIAL_TIERS[tierIndex];
-        const power = tier.power;
+        // ▼▼▼ 変更: 3種類(バランス/物理/魔法)から抽選 ▼▼▼
+        const randType = Math.random();
+        let subType = 'bal'; // デフォルト: バランス(既存)
+        if (randType < 0.33) subType = 'phy';      // 物理
+        else if (randType < 0.66) subType = 'mag'; // 魔法
+        
+        // data.js で定義したデータを取り出す
+        const matData = MATERIAL_TIERS[tierIndex][subType];
+        
+        const power = matData.power;
+        const bias = matData.bias || { atk:1, def:1, int:1, spd:1 };
 
         if (type === 'weapon') {
             const wKeys = Object.keys(WEAPON_TYPES);
             const wKey = wKeys[Math.floor(Math.random() * wKeys.length)];
             const wType = WEAPON_TYPES[wKey];
             
-            item.id = `gen_weapon_${tierIndex}_${wKey}`;
-            item.name = `${tier.name}${wType.name}`;
+            // IDにサブタイプ(bal/phy/mag)を含めて区別する
+            item.id = `gen_weapon_${tierIndex}_${subType}_${wKey}`;
+            item.name = `${matData.name}${wType.name}`;
             item.atk = 0; item.int = 0; item.def = 0; item.hp = 0; item.spd = 0;
 
             const mainVal = Math.floor(power * wType.mod);
-            if (wType.stat === 'atk') item.atk = mainVal;
-            if (wType.stat === 'int') item.int = mainVal;
-            if (wType.stat === 'def') item.def = mainVal;
+            
+            // メインステータスにバイアスを適用
+            if (wType.stat === 'atk') item.atk = Math.floor(mainVal * bias.atk);
+            if (wType.stat === 'int') item.int = Math.floor(mainVal * bias.int);
+            if (wType.stat === 'def') item.def = Math.floor(mainVal * bias.def);
 
+            // サブステータスにもバイアス適用
             if (wType.sub) {
                 Object.keys(wType.sub).forEach(key => {
                     let val = Math.floor(power * wType.sub[key]);
-                    if (key === 'hp') val = Math.floor(power * wType.sub[key] * 5);
+                    if (key === 'hp') val *= 5;
+                    
+                    // HPなどにも補正をかけたい場合はここで bias[key] を掛ける
+                    if (bias[key]) val = Math.floor(val * bias[key]);
+                    
                     item[key] = (item[key] || 0) + val;
                 });
             }
@@ -4013,8 +4100,8 @@ if (this.enemy && this.enemy.curse > 0) {
             const aKey = aKeys[Math.floor(Math.random() * aKeys.length)];
             const aType = ARMOR_TYPES[aKey];
 
-            item.id = `gen_armor_${tierIndex}_${aKey}`;
-            item.name = `${tier.name}${aType.name}`;
+            item.id = `gen_armor_${tierIndex}_${subType}_${aKey}`;
+            item.name = `${matData.name}${aType.name}`;
             item.atk = 0; item.int = 0; item.def = 0; item.hp = 0; item.spd = 0;
 
             const isModObj = (typeof aType.mod === 'object');
@@ -4023,23 +4110,25 @@ if (this.enemy && this.enemy.curse > 0) {
                 let multiplier = isModObj ? (aType.mod[statKey] || aType.mod.others || 1.0) : aType.mod;
                 let val = Math.floor(power * multiplier);
                 if (statKey === 'hp') val *= 5;
+
+                // バイアス適用
+                if (bias[statKey]) val = Math.floor(val * bias[statKey]);
+
                 item[statKey] = (item[statKey] || 0) + val;
             });
         } 
         else if (type === 'accessory') {
-            // ▼ 修正: isUnique: true のアイテムを除外するフィルタを追加
             let candidates = ACCESSORY_EFFECTS.filter(e => !e.isUnique);
-            
             if (this.mode === 'rogue' && this.depth < 30) {
                 candidates = candidates.filter(e => !e.id.startsWith('pin_small'));
             }
-
             const effect = candidates[randomInt(0, candidates.length - 1)];
             item.id = effect.id;
             item.name = effect.name;
             item.passive = effect;
             item.atk = 0; item.int = 0; item.def = 0; item.hp = 0; item.spd = 0;
-        } else if (type === 'magic_circle') {
+        } 
+        else if (type === 'magic_circle') {
             const effect = MAGIC_CIRCLE_DATABASE[Math.floor(Math.random() * MAGIC_CIRCLE_DATABASE.length)];
             item.id = effect.id;
             item.name = effect.name;
@@ -4271,6 +4360,19 @@ applyCurseToEnemy(amount) {
     // 状態異常付与メソッド
     applyStatus(statusId, turns = 3) {
         if (statusId === 'shrink') {
+            // ▼ 追加: 反転のピアス効果
+            const acc = this.equipment.accessory;
+            const isConvert = acc && acc.id === 'acc_click_convert' && 
+                              (this.player.hasStatus('undressing') || this.player.isLiberated || this.player.expansionLevel > 0);
+
+            if (isConvert) {
+                // 縮小の代わりに膨張
+                this.processExpansion(1); // 膨張Lv+1
+                this.log("反転のピアスが輝き、縮小の呪いを膨張の力に変えた！");
+                this.showToast("反転のピアス：縮小効果が反転した！", "system");
+                return; // 縮小処理は行わない
+            }
+
             // 巨人のベルト (縮小無効)
             if (this.equipment.accessory && this.equipment.accessory.passive && this.equipment.accessory.passive.type === 'immune_shrink') {
                 this.log("巨人のベルトが縮小を防いだ！");
@@ -4823,6 +4925,18 @@ adjustSpringStatus(type, delta) {
         const curExp = (typeof this.player.expansionLevel === 'number') ? this.player.expansionLevel : 0;
 
         if (type === 'shrink') {
+            // ▼ 追加: 反転のピアス効果
+            const acc = this.equipment.accessory;
+            const isConvert = acc && acc.id === 'acc_click_convert' && 
+                              (this.player.hasStatus('undressing') || this.player.isLiberated || this.player.expansionLevel > 0);
+
+            if (isConvert && delta > 0) {
+                // 縮小+1 の代わりに 膨張+1
+                this.adjustSpringStatus('expansion', 1);
+                this.showToast("反転のピアス：縮小効果が反転した！", "system");
+                return; // 縮小処理は行わない
+            }
+            
             const min = this.getMinShrinkLevel(); 
             const max = 3; 
             
@@ -4938,79 +5052,133 @@ adjustSpringStatus(type, delta) {
 
     updateFairyMessage(isManual = false) {
         if (!this.isHome) return;
+        
+        // ▼ ロック中は反応しない
+        if (this.isClickLocked) return;
 
         let text = "";
+        
+        // --- 手動クリック処理 ---
+        if (isManual) {
+            // 1. カウンター処理
+            this.clickStreak = (this.clickStreak || 0) + 1;
+            
+            // ▼▼▼ 追加: 300回通知 ▼▼▼
+            if (this.clickStreak === 300) {
+                this.showToast("そのくらいにしてあげませんか……？", "system"); // systemスタイル等は適宜
+            }
+
+            // ---------------------------------------------------------
+            // ▼ タイマー設定: 連打が途切れたら状態をリセット
+            // ---------------------------------------------------------
+            if (this.clickStreakTimer) clearTimeout(this.clickStreakTimer);
+            
+            // ▼ タイマー発火で段階リセット処理へ
+            this.clickStreakTimer = setTimeout(() => {
+                this.processGradualReset();
+            }, 2500);
+
+
+            // 2. イベントデータ取得
+            let eventData = null;
+            let isLimitLoop = false;
+            let isLimitBreath = false;
+
+            // A. 150回超えのループ判定 (160, 170, 180...)
+            if (this.clickStreak > 150 && this.clickStreak % 10 === 0) {
+                isLimitLoop = true;
+            }
+            // B. 通常ステップ判定 (10, 20... 150)
+            else if (typeof CLICK_EVENT_DIALOGUE !== 'undefined' && CLICK_EVENT_DIALOGUE[`count_${this.clickStreak}`]) {
+                eventData = CLICK_EVENT_DIALOGUE[`count_${this.clickStreak}`];
+            }
+            // A. 150回超えのループ判定
+            if (this.clickStreak > 150) {
+                if (this.clickStreak % 10 === 0) {
+                    isLimitLoop = true; // 10回ごとの長文
+                } else {
+                    isLimitBreath = true; // それ以外は喘ぎ
+                }
+            }
+            // B. 通常ステップ判定
+            else if (CLICK_EVENT_DIALOGUE[`count_${this.clickStreak}`]) {
+                eventData = CLICK_EVENT_DIALOGUE[`count_${this.clickStreak}`];
+            }
+
+            // 3. イベント実行
+            if (isLimitLoop) {
+                // 打ち止めループ用セリフ
+                text = this.getRandomDialogue(CLICK_EVENT_DIALOGUE.limit_loop);
+                // 演出は弱めの揺れで固定
+                this.ui.playerImg.classList.remove('shake', 'shake_strong'); // 重複防止
+                void this.ui.playerImg.offsetWidth; // リフロー
+                this.ui.playerImg.classList.add('shake');
+                setTimeout(() => this.ui.playerImg.classList.remove('shake'), 200);
+            }
+            else if (isLimitBreath) {
+                // ▼ 新規: 短い喘ぎ
+                text = this.getRandomDialogue(LIMIT_BREATH_DIALOGUE);
+                // 演出は控えめに
+                this.ui.playerImg.classList.remove('shake', 'shake_strong');
+                void this.ui.playerImg.offsetWidth;
+                this.ui.playerImg.classList.add('shake');
+                setTimeout(() => this.ui.playerImg.classList.remove('shake'), 200);
+            } 
+            else if (eventData) {
+                // ▼▼▼ 先に状態を変更して立ち絵を変える (タイミング同期) ▼▼▼
+
+                // ゲーム内イベント実行 (strip / expand)
+                if (eventData.event) {
+                    if (eventData.event === 'strip') {
+                        // 強制脱衣 (ステータス付与のみ、ログは出さない)
+                        if (!this.player.hasStatus('undressing') && !this.player.isLiberated) {
+                            this.player.addStatus('undressing', 99);
+                        }
+                    } 
+                    else if (eventData.event.startsWith('expand')) {
+                        // 膨張 (Lvを加算)
+                        // 通常上限(Lv3)を無視して加算する
+                        if (this.player.expansionLevel < 4) {
+                            this.player.expansionLevel++;
+                        }
+                    }
+                    // ★重要: 立ち絵とUIを即座に更新
+                    this.updateCharacterSprite();
+                    this.updateStatsUI();
+                }
+
+                // アクション演出 (shake / shake_strong)
+                if (eventData.action) {
+                    this.ui.playerImg.classList.remove('shake', 'shake_strong'); // クラス削除
+                    void this.ui.playerImg.offsetWidth; // 強制リフロー(再生用)
+                    this.ui.playerImg.classList.add(eventData.action);
+                    
+                    // アニメーション終了後にクラスを外す
+                    setTimeout(() => this.ui.playerImg.classList.remove(eventData.action), 500);
+                }
+
+                // セリフの決定（配列からランダム）
+                text = this.getRandomDialogue(eventData.text);
+            }
+
+            // イベントセリフがある場合はそれを表示して終了（通常の会話抽選は行わない）
+            if (text) {
+                this.showFairyMessage(text);
+                return; 
+            }
+            
+            // イベント該当回数でなければ、低確率で通常クリックセリフへ流す(既存処理)
+            // (以下、既存ロジック)
+        } else {
+            // 自動更新時はカウンターリセットしない（タイマーに任せる）
+            // もし放置ボイスでリセットしたいならここで this.clickStreak = 0;
+        }
+
+        // --- 独り言ロジック (Idle Talk) ---
         const sLv = (typeof this.player.shrinkLevel === 'number') ? this.player.shrinkLevel : 0;
         const eLv = (typeof this.player.expansionLevel === 'number') ? this.player.expansionLevel : 0;
         const isLiberated = this.player.isLiberated; // 解放の証装備中
 
-        // --- 手動クリック (Manual / Touch) ---
-        if (isManual) {
-            this.clickStreak++;
-
-            // 50%でクリック反応、50%で通常の雑談へ流す
-            if (Math.random() < 0.5) {
-                let targetList = [];
-
-                // 優先度 A: 膨張状態 (自己接触)
-                if (eLv > 0) {
-                    const key = `touch_expansion_lv${Math.min(3, eLv)}`;
-                    if (FAIRY_TALK_EXPANSION[key]) {
-                        targetList = FAIRY_TALK_EXPANSION[key];
-                    }
-                }
-                
-                // 優先度 B: 縮小状態
-                if (targetList.length === 0 && sLv > 0) {
-                    if (sLv === 3) targetList = FAIRY_DIALOGUE_DATA.touch_shrink_3 || [];
-                    else if (sLv === 2) targetList = FAIRY_DIALOGUE_DATA.touch_shrink_2 || [];
-                    else targetList = FAIRY_DIALOGUE_DATA.touch_shrink_1 || [];
-                }
-
-                // 優先度 C: 解放/脱衣状態 (膨張なし)
-                // ※ isLiberated または 脱衣状態
-                if (targetList.length === 0 && (isLiberated || this.player.hasStatus('undressing'))) {
-                    // 脱衣専用セリフがあればそれを使う (既存データ依存)
-                    if (FAIRY_DIALOGUE_DATA.touch_stripped && FAIRY_DIALOGUE_DATA.touch_stripped.lv1) {
-                        targetList = FAIRY_DIALOGUE_DATA.touch_stripped.lv1; 
-                    }
-                }
-
-                // 優先度 D: 通常
-                if (targetList.length === 0) {
-                    // 既存の touch_normal データ構造に合わせて取得
-                    if (FAIRY_DIALOGUE_DATA.touch_normal) {
-                        if (Array.isArray(FAIRY_DIALOGUE_DATA.touch_normal)) {
-                            targetList = FAIRY_DIALOGUE_DATA.touch_normal;
-                        } else if (FAIRY_DIALOGUE_DATA.touch_normal.lv1) {
-                            targetList = FAIRY_DIALOGUE_DATA.touch_normal.lv1;
-                        }
-                    }
-                }
-
-                // 2. 【追加】膨張Lv4 (限界サイズ) なら、専用セリフを候補に「混ぜる」
-                // 前向きであろうとしつつも、隠しきれない物理的・精神的限界
-                if (this.player.expansionLevel >= 4) {
-                    const lv4ManualDialogues = [
-                        "前が見えません……。でも、この巨大な二つの塊が、私の魔力タンクだと思えば……頼もしい、ですよね？",
-                        "うぅ、重たい……。首が持っていかれそうです。でも、これだけの質量があれば、どんな衝撃も吸収できちゃうかも♪",
-                        "皮膚が限界まで伸びきって、パンパンです。……つんって突っついたら、弾けちゃいそうで……少し怖くて、ドキドキします。",
-                        "顔より大きいなんて……ふふ、バランス崩壊もいいところです。でも、これが「大妖精」の器の大きさってことですよね！",
-                        "よいしょ……っと。持ち上げないと歩けないなんて。……贅沢な悩みだと思って、頑張って支えますっ！"
-                    ];
-                    targetList.push(...lv4ManualDialogues);
-                }
-
-                if (targetList.length > 0) {
-                    text = this.getRandomDialogue(targetList);
-                }
-            }
-        } else {
-            this.clickStreak = 0; // 自動更新時はリセット
-        }
-
-        // --- 独り言ロジック (Idle Talk) ---
-        
         // 1. 帰還直後のイベント (優先度高)
         if (!text && this.returnState) {
             // (既存の帰還ロジックを維持)
@@ -5199,5 +5367,79 @@ adjustSpringStatus(type, delta) {
     getRandomDialogue(arr) {
         if (!arr || arr.length === 0) return "";
         return arr[Math.floor(Math.random() * arr.length)];
+    }
+
+    // 連打終了後の段階的リセット処理
+    async processGradualReset() {
+        // ロック開始
+        this.isClickLocked = true;
+        
+        // 戻る前の最大到達レベルを記録（セリフ分岐用）
+        // Lv4以上なら4、それ以外は現在のレベル
+        let maxReachedLv = this.player.expansionLevel || 0;
+        if (maxReachedLv > 4) maxReachedLv = 4;
+        
+        // 通常状態(Lv0)だった場合でも、少し焦っていたならLv0用セリフを出すため記録
+        // ただしclickStreakが小さすぎれば反応しないなどの調整も可（今回は単純に実行）
+
+        // 最終的に戻るべき下限レベル
+        const minExp = this.getMinExpansionLevel();
+
+        // 段階的に戻すアニメーションループ
+        while (this.player.expansionLevel > minExp) {
+            await wait(500); // 0.5秒待機
+            
+            // レベルを1下げる
+            this.player.expansionLevel--;
+            
+            // 立ち絵更新
+            this.updateCharacterSprite();
+            this.updateStatsUI();
+        }
+
+        // 脱衣状態の解除 (装備由来でなければ)
+        let isEquipStrip = false;
+        if (this.equipment.magic_circle && this.equipment.magic_circle.id === 'mc_lust') isEquipStrip = true;
+        
+        if (this.player.hasStatus('undressing') && !this.player.isLiberated && !isEquipStrip) {
+            // 脱衣解除は一瞬で行う（あるいはレベル戻しループの後で）
+            this.player.removeStatus('undressing');
+            this.updateCharacterSprite(); // 服を着た絵に戻す
+        }
+
+        // ▼▼▼ 追加: 300回報酬ロジック ▼▼▼
+        const finalStreak = this.clickStreak || 0;
+
+        if (finalStreak >= 300) {
+            // 候補アイテムを抽出
+            const candidates = [
+                ...ACCESSORY_EFFECTS.filter(i => i.clickReward),
+                ...MAGIC_CIRCLE_DATABASE.filter(i => i.clickReward)
+            ];
+            
+            if (candidates.length > 0) {
+                const reward = candidates[Math.floor(Math.random() * candidates.length)];
+                const newItem = getItemById(reward.id);
+                
+                this.permInventory.push(newItem);
+                
+                this.showToast(`隠し報酬『${newItem.name}』を手に入れた……`, "success");
+                await wait(1000); // 演出待ち
+            }
+        }
+
+        // カウンターリセット
+        this.clickStreak = 0;
+
+        // 完了後のセリフ再生
+        // 直前まで到達していたレベルに応じて分岐
+        const dialogueKey = `lv${maxReachedLv}`;
+        const dialogueList = RESET_DIALOGUE[dialogueKey] || RESET_DIALOGUE['lv0'];
+        const text = this.getRandomDialogue(dialogueList);
+        
+        this.showFairyMessage(text);
+
+        // ロック解除
+        this.isClickLocked = false;
     }
 }
