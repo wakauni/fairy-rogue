@@ -1,3 +1,5 @@
+const DEFAULT_PLAYER_STATS = { maxHp: 100, atk: 10, def: 5, int: 15, spd: 12 };
+
 const FACE_IMAGES = {
     NORMAL: 'Fairy_face1.png', // 通常
     PINCH:  'Fairy_face2.png', // ピンチ（小ダメージ）
@@ -26,7 +28,7 @@ class BattleSystem {
     constructor() {
         // プレイヤー初期ステータス (HP, ATK, DEF, INT, SPD)
         this.player = new Unit("妖精", 100, 10, 5, 15, 12, false, true);
-        this.playerBaseStats = { maxHp: 100, atk: 10, def: 5, int: 15, spd: 12 }; // 装備なしの基礎ステータス
+        this.playerBaseStats = { ...DEFAULT_PLAYER_STATS }; // 装備なしの基礎ステータス
         this.activeBonuses = { unique: false, heavy: false }; // デッキボーナス状態
         // 敵初期ステータス
         this.enemy = null; // 戦闘開始時に生成
@@ -41,6 +43,7 @@ class BattleSystem {
         this.backupData = null; // ローグライクモード用バックアップ
         this.isSaveEnabled = false; // セーブ許可フラグ (初期化中の上書き防止)
         this.rogueHighScore = 0; // ローグライク最高記録
+        this.canReceiveWisdom = false; // 10階層到達ボーナスフラグ
 
         this.tempInventory = []; // 探索中の仮取得アイテム
         this.permInventory = []; // 持ち帰り確定アイテム（未装備）
@@ -174,6 +177,8 @@ class BattleSystem {
 
         const saveData = {
             player: {
+                                // ... (既存のhp, maxHpなどの保存) ...
+                baseStats: this.playerBaseStats, 
                 hp: this.player.hp,
                 maxHp: this.player.maxHp,
                 atk: this.player.atk,
@@ -204,6 +209,7 @@ class BattleSystem {
                 restCount: this.restCount,
                 turn: this.turn,
                 tempInventory: this.tempInventory,
+                canReceiveWisdom: this.canReceiveWisdom,
                 state: this.isHome ? 'home' : (this.enemy ? 'battle' : 'exploration'),
                 rogueHighScore: this.rogueHighScore,
                 collection: this.collection // ▼ 追加
@@ -257,6 +263,9 @@ class BattleSystem {
         try {
             const data = JSON.parse(json);
             
+            // ▼▼▼ 追加: 基礎ステータスの復元 (なければデフォルト) ▼▼▼
+            this.playerBaseStats = data.player.baseStats || { ...DEFAULT_PLAYER_STATS };
+
             // プレイヤー復元
             Object.assign(this.player, data.player);
             if (data.player.currentStatus) {
@@ -357,6 +366,7 @@ class BattleSystem {
             this.restCount = data.game.restCount;
             this.turn = data.game.turn;
             this.tempInventory = data.game.tempInventory || [];
+            this.canReceiveWisdom = data.game.canReceiveWisdom || false; // ロード
             this.rogueHighScore = data.game.rogueHighScore || 0;
             
             // ▼ 追加: コレクションの復元
@@ -450,39 +460,92 @@ class BattleSystem {
     // --- シーン管理 ---
 
     // Homeシーン表示
-    showHome() {
+showHome() {
         this.isHome = true;
+        this.setControlsEnabled(true);
+        this.resetPlayerBaseStats();
+
+        // ▼▼▼ 修正: 帰還時に必ず全ボタンのロックを解除する（これが原因でした） ▼▼▼
+        this.setControlsEnabled(true);
+
+        // 安全策: インライン戦利品エリアを隠す
+        const lootArea = document.getElementById('battle-loot-area');
+        if (lootArea) lootArea.style.display = 'none';
+        if (this.ui.enemyGraphic) {
+            this.ui.enemyGraphic.style.display = 'flex';
+        }
+        const enemyIntent = document.getElementById('enemy-intent');
+        if (enemyIntent) enemyIntent.style.display = 'flex';
+
+        // 念のため泉のオーバーレイを強制的に閉じる
+        const springOverlay = document.getElementById('spring-overlay');
+        if (springOverlay) springOverlay.style.display = 'none';
+
+        this.depth = this.depth || 0; // 現在の深度
+
+        // 10階層以上なら知恵フラグON
+        if (this.depth >= 10) {
+            this.canReceiveWisdom = true;
+            this.showToast("深い階層からの生還により、妖精の泉が輝いている！", "info");
+        }
+
+        // 100階層深部到達ボーナス (色欲の上位装備)
+        if (this.depth >= 100 && this.equipment.magic_circle && this.equipment.magic_circle.id === 'mc_lust') {
+            if (!this.player.isLiberated) {
+                const itemId = 'acc_lust_pendant';
+                const hasItem = this.permInventory.some(i => i.id === itemId) || (this.equipment.accessory && this.equipment.accessory.id === itemId);
+                if (!hasItem) {
+                    const item = getItemById(itemId);
+                    if (item) {
+                        this.permInventory.push(item);
+                        this.showFairyMessage("このペンダント……迷宮の奥底で拾ったんですが、なんだか熱いんです。");
+                        this.showToast("条件達成！『色欲のペンダント』を獲得！", "success");
+                    }
+                }
+            }
+            else if (this.player.isLiberated) {
+                const itemId = 'acc_lust_liberation';
+                const hasItem = this.permInventory.some(i => i.id === itemId) || (this.equipment.accessory && this.equipment.accessory.id === itemId);
+                if (!hasItem) {
+                    const item = getItemById(itemId);
+                    if (item) {
+                        this.permInventory.push(item);
+                        this.showFairyMessage("解放の証が……変質してしまいました。禍々しいけど、すごい魔力を感じます……！");
+                        this.showToast("条件達成！『【色欲】解放の証』を獲得！", "success");
+                    }
+                }
+            }
+        }
+        
+        this.depth = 0; // リセット
+
         document.getElementById('player-area').classList.add('interactive');
 
         // タイマーリセット
         this.stopMessageTimer();
 
-        // 吹き出しの表示状態をリセット
         const bubble = document.getElementById('speech-bubble');
         if (bubble) bubble.style.display = 'block';
 
-        // UI Cleanup: 前のシーンのボタンを消す
         this.ui.battleCommands.style.display = 'none';
-        // this.ui.systemCommands.style.display = 'none'; // 右下を使うため削除（後でflexにする）
 
         this.player.hp = this.player.maxHp; // 全回復
-        // ▼ 追加: 防壁リセット
         this.player.barrier = 0;
+        this.player.currentStatus = null;
+        this.player.buffs = [];
 
         this.updateStatsUI();
         this.updateDeckUI();
         
         this.menuUi.overlay.style.display = 'flex';
-        this.menuUi.loot.style.display = 'none'; // 既存のリスト表示エリアは隠す
+        this.menuUi.loot.style.display = 'none'; 
 
-        // 表示内容の切り替えロジック
         let contentHtml = '';
         let titleText = '';
 
-        // 条件A: 未確認の戦利品がある場合（ダンジョンからの帰還直後）
         if (this.tempInventory.length > 0) {
             titleText = "探索から帰還しました！今回の戦利品です";
-            this.returnState = 'victory'; // 勝利帰還フラグ
+            this.returnState = 'victory';
 
             contentHtml += `<div class="loot-list" style="display:block; max-height:250px; margin-bottom:10px;">`;
             contentHtml += this.tempInventory.map(item => 
@@ -493,7 +556,6 @@ class BattleSystem {
             contentHtml += `</div>`;
             contentHtml += `<div style="font-size:14px; color:#f1c40f;">アイテムは倉庫に移動されました。</div>`;
 
-            // 戦利品を確定（Permanent Inventoryへ移動）してクリア
             this.tempInventory.forEach(item => {
                 if (item.cost !== undefined) {
                     this.cardPool.push(item);
@@ -503,46 +565,32 @@ class BattleSystem {
             });
             this.tempInventory = [];
         } else {
-            // 条件B: 通常時（初回起動、戦利品なし帰還、編成画面からの戻りなど）
             titleText = "妖精の森（拠点）";
-            // コンテンツエリアは空でも良いが、何か表示したい場合はここに追加
             contentHtml += `<div style="font-size:14px; color:#ccc; margin-top:10px;">準備を整えて、ダンジョンへ出発しましょう。</div>`;
         }
 
         this.menuUi.title.textContent = titleText;
         this.menuUi.content.innerHTML = contentHtml;
         
-        // 中央ボタンのクリア
         this.menuUi.buttons.innerHTML = '';
 
-        // 右下コマンドエリアの構築
         this.ui.systemCommands.style.display = 'flex';
-        this.ui.systemCommands.innerHTML = ''; // クリア
+        this.ui.systemCommands.innerHTML = '';
 
         const actions = [
             { text: "探索開始", onClick: () => this.startDungeon() }
         ];
-        
-        // 試練の洞窟（ローグライク）ボタン
+
         actions.push({ text: "試練の洞窟へ", onClick: () => this.confirmStartRogueMode() });
-
-        // 所持品または装備がある場合は最強装備ボタンを表示 (Shortcut)
-        if (this.permInventory.length > 0 || this.equipment.weapon || this.equipment.armor || this.equipment.accessory || this.equipment.magic_circle) {
-            actions.push({ text: "最強装備", onClick: () => this.equipBestGear() });
-        }
-
-        // 編成ボタン
         actions.push({ text: "編成", onClick: () => this.openManagement() });
-
-        // 冒険譚ボタン
+        actions.push({ text: "妖精の泉", onClick: () => this.showFairySpring(), style: "border-color:#4a90e2; color:#aaddff;" });
         actions.push({ text: "冒険譚", onClick: () => this.showAdventureLog() });
 
         this.renderSystemButtons(actions);
 
-        // 妖精のメッセージ更新開始
         this.updateFairyMessage();
         this.startMessageTimer();
-        this.saveGame(); // 拠点セーブ
+        this.saveGame();
     }
 
     // 冒険譚画面の表示
@@ -969,360 +1017,164 @@ class BattleSystem {
         this.saveGame(); // 装備変更セーブ
     }
 
-    // ステータス再計算
-    recalcStats() {
-        // ▼ 追加: 解放の証フラグの更新 (Unit側で参照するため)
-        this.player.isLiberated = (this.equipment.accessory && this.equipment.accessory.isLiberationProof);
-        let addAtk = 0;
-        let addMaxHp = 0;
-        let addDef = 0;
-        let addInt = 0;
-        let addSpd = 0;
-        let buffDef = 0; // バフによるDEF加算分（脱衣後も残る）
-        let maxMinShrinkLevel = 0; // 装備による縮小下限レベルの最大値
-        let statMultipliers = { atk: 1.0, def: 1.0, int: 1.0, spd: 1.0, hp: 1.0 }; // 乗算補正
+// BattleSystem.js - recalcStats メソッドの修正
+    // 基礎ステータスを初期値にリセットする
+    resetPlayerBaseStats() {
+        this.playerBaseStats = { ...DEFAULT_PLAYER_STATS };
+        this.recalcStats();    // 装備の下限Lvなどを再適用
+        this.updateStatsUI();  
+        this.updateSpringUI(); // 泉のUI（ボタンの活性化状態）も同期
+    }
+// --- ヘルパーメソッド: 変性レベルの下限チェック ---
 
-        // ▼ 追加: 魔法陣ブースト判定 (魔法陣ループの前に定義)
-        let mcBoostRate = 1.0;
-        if (this.equipment.accessory && this.equipment.accessory.passive && this.equipment.accessory.passive.type === 'mc_booster') {
-            mcBoostRate = 2.0; // 上昇量を2倍にする
-        }
-        // ▼ 追加: 手札上限ボーナス用変数
-        this.handLimitBonus = 0;
-
-        // 1. 装備補正
+// 現在の装備などによる「縮小レベルの下限」を取得
+    getMinShrinkLevel() {
+        let maxMin = (this.player && this.player.minShrinkLevel) ? this.player.minShrinkLevel : 0;
+        
         Object.values(this.equipment).forEach(item => {
-            if (item) {
-                addAtk += (item.atk || 0);
-                addDef += (item.def || 0);
-                addInt += (item.int || 0);
-                addMaxHp += (item.hp || 0);
-                addSpd += (item.spd || 0);
+            if (!item) return;
 
-                // [拡張] 装備パッシブ (ENDGAME_ITEMS)
-                if (item.stats) { // ENDGAME_ITEMS形式の固定値加算
-                    if (item.stats.atk) addAtk += item.stats.atk;
-                    if (item.stats.def) addDef += item.stats.def;
-                    if (item.stats.int) addInt += item.stats.int;
-                    if (item.stats.hp) addMaxHp += item.stats.hp;
-                    if (item.stats.spd) addSpd += item.stats.spd;
+            // 1. IDを直接チェック
+            if (item.id) {
+                // 小人の留め針 (pin_small_1 ~ 3)
+                if (item.id.startsWith('pin_small_')) {
+                    const level = parseInt(item.id.split('_').pop());
+                    if (!isNaN(level)) maxMin = Math.max(maxMin, level);
                 }
-                if (item.passive) {
-                    if (item.passive.handSizeMod) this.handLimitBonus += item.passive.handSizeMod;
-                    if (item.passive.type === 'hand_size_up') this.handLimitBonus += item.passive.value;
-                    if (item.passive.minShrinkLevel) maxMinShrinkLevel = Math.max(maxMinShrinkLevel, item.passive.minShrinkLevel);
-                    if (item.passive.statMultiplier) {
-                        if (item.passive.statMultiplier.atk) statMultipliers.atk *= item.passive.statMultiplier.atk;
-                        if (item.passive.statMultiplier.def) statMultipliers.def *= item.passive.statMultiplier.def;
-                        if (item.passive.statMultiplier.int) statMultipliers.int *= item.passive.statMultiplier.int;
-                        if (item.passive.statMultiplier.spd) statMultipliers.spd *= item.passive.statMultiplier.spd;
-                    }
-                }
-
-                // magic_circleの場合の処理を追加
-                if (item && item.type === 'magic_circle') {
-                    const mc = item.passive; // MAGIC_CIRCLE_DATABASEの定義
-
-                    // 小人の留め針(pin_small)チェック
-                    const hasPin = this.equipment.accessory && this.equipment.accessory.id.startsWith('pin_small');
-                    if (mc.type === 'shrink_int' && hasPin) {
-                        // 留め針がある場合、この魔法陣の効果は無効化される
-                        return;
-                    }
-                    
-                    if (mc.stats) {
-                        if (mc.stats.hpMult !== undefined) statMultipliers.hp *= mc.stats.hpMult;
-                        if (mc.stats.defMult !== undefined) statMultipliers.def *= mc.stats.defMult;
-                    }
-
-                    // ステータス倍率適用
-                    if (mc.type === 'stat_mult') {
-                        const effectiveValue = 1 + (mc.value - 1) * mcBoostRate;
-                        if (mc.stat === 'hp') statMultipliers.hp *= effectiveValue;
-                        if (mc.stat === 'atk') statMultipliers.atk *= effectiveValue;
-                        if (mc.stat === 'def') statMultipliers.def *= effectiveValue;
-                        if (mc.stat === 'int') statMultipliers.int *= effectiveValue;
-                        if (mc.stat === 'spd') statMultipliers.spd *= effectiveValue;
-                    }
-                    // 縮小・INT
-                    if (mc.type === 'shrink_int') {
-                        statMultipliers.int *= mc.intMult;
-                        maxMinShrinkLevel = Math.max(maxMinShrinkLevel, mc.minLevel);
-                    }
-                    // 武器シナジー (ステータス分)
-                    if (mc.type === 'weapon_synergy' && this.equipment.weapon && this.equipment.weapon.name.includes(mc.wType)) {
-                        if (mc.stats) {
-                            if (mc.stats.atkMult) statMultipliers.atk *= mc.stats.atkMult;
-                            if (mc.stats.intMult) statMultipliers.int *= mc.stats.intMult;
-                            if (mc.stats.defMult) statMultipliers.def *= mc.stats.defMult;
-                            if (mc.stats.hpMult) statMultipliers.hp *= mc.stats.hpMult;
-                            if (mc.stats.evasionAdd) { /* 回避率は別途管理が必要 */ }
-                        }
-                    }
-                    // 裸シナジー
-                    if (mc.type === 'naked_synergy') {
-                        if (!this.equipment.weapon && !this.equipment.armor) {
-                            if (mc.mode === 'offensive') { statMultipliers.atk *= 2.0; statMultipliers.int *= 2.0; }
-                            if (mc.mode === 'defensive') { statMultipliers.def *= 2.0; statMultipliers.hp *= 2.0; }
-                        }
-                    }
-                    // 孤高シナジー
-                    if (mc.type === 'solo_synergy') {
-                        if (!this.equipment.weapon && !this.equipment.armor && !this.equipment.accessory) {
-                            statMultipliers.hp *= 3.0; // +200% = 3倍
-                            statMultipliers.int *= 3.0;
-                            statMultipliers.atk = 0; // -100%
-                            statMultipliers.def = 0;
-                            // 手札上限+1, 状態異常無効は別途処理
-                        }
-                    }
-                    // 代償 (HP半減)
-                    if (mc.type === 'trade_off_regen') {
-                        statMultipliers.hp *= mc.hpMult;
-                    }
-                }
-
-                // --- アクセサリーの処理 (追加) ---
-                if (item.type === 'accessory' && item.passive) {
-                    const p = item.passive;
-                    const weaponName = this.equipment.weapon ? this.equipment.weapon.name : '';
-                    const armorName = this.equipment.armor ? this.equipment.armor.name : '';
-
-                    if (p.type === 'chaos_healer') {
-                        this.handLimitBonus = (this.handLimitBonus || 0) - 3;
-                    }
-
-                    // 武器シナジー (ステータス系)
-                    if (p.type === 'weapon_syn_stat' && weaponName.includes(p.wType)) {
-                        if (p.stat === 'def') statMultipliers.def *= p.val;
-                        if (p.stat === 'atk') statMultipliers.atk *= p.val;
-                        if (p.stat === 'int') statMultipliers.int *= p.val;
-                    }
-                    // 杖シナジー (HP + 手札)
-                    if (p.type === 'weapon_syn_wand' && weaponName.includes(p.wType)) {
-                        statMultipliers.hp *= 1.2;
-                        this.handLimitBonus += 1; // 後で startPlayerTurn で使用
-                    }
-
-                    // 防具シナジー
-                    if (p.type === 'armor_syn_heavy' && armorName.includes(p.aType)) {
-                        statMultipliers.hp *= 1.2;
-                        statMultipliers.def *= 1.2;
-                    }
-                    if (p.type === 'armor_syn_robe' && armorName.includes(p.aType)) {
-                        statMultipliers.def *= 1.2;
-                        statMultipliers.spd *= 1.2;
-                    }
+                // 小人の魔法陣 (mc_shrink_int_1 ~ 3)
+                if (item.id.startsWith('mc_shrink_int_')) {
+                    const level = parseInt(item.id.split('_').pop());
+                    if (!isNaN(level)) maxMin = Math.max(maxMin, level);
                 }
             }
-        });
 
-        // 2. デッキボーナス判定
-        // A. ユニークボーナス (Technician Style): 重複なし
-        const cardIds = this.masterDeck.map(c => c.id);
-        const isUnique = cardIds.length > 0 && new Set(cardIds).size === cardIds.length;
+            // 2. プロパティによる判定 (minShrinkLevel または minLevel)
+            const p = item.passive || item;
+            const val = p.minShrinkLevel || p.minLevel;
+            if (val) maxMin = Math.max(maxMin, val);
+        });
+        return maxMin;
+    }
+    // 現在の装備などによる「膨張レベルの下限」を取得
+    getMinExpansionLevel() {
+        let minLv = 0;
         
-        // B. 枚数ボーナス (Heavy Deck Style): 24枚以上
-        const isHeavy = this.masterDeck.length >= 24;
+        // 色欲の魔法陣は強制的にレベルを固定するため、実質的な下限となる
+        if (this.equipment.magic_circle && this.equipment.magic_circle.id === 'mc_lust') {
+            const hasComboItem = this.equipment.accessory && 
+                                 (this.equipment.accessory.id === 'acc_lust_pendant' || 
+                                  this.equipment.accessory.id === 'acc_lust_liberation');
+            // コンボ時はLv4固定、単体でもLv3固定 -> これが下限になる
+            minLv = hasComboItem ? 4 : 3;
+        }
+        return minLv;
+    }
+// BattleSystem.js
 
-        this.activeBonuses = { unique: isUnique, heavy: isHeavy };
+// ステータス再計算
+    recalcStats() {
+        if (!this.player) return;
 
-        // 3. パッシブカード補正
-        this.masterDeck.forEach(card => {
-            if (card.type === 'passive' && card.passiveStats) {
-                if (card.passiveStats.maxHp) addMaxHp += card.passiveStats.maxHp;
-                if (card.passiveStats.def) addDef += card.passiveStats.def;
-                if (card.passiveStats.atk) addAtk += card.passiveStats.atk;
-                if (card.passiveStats.int) addInt += card.passiveStats.int;
+        // --- 1. 下限の強制適用 ---
+        const minShrink = this.getMinShrinkLevel();
+        const minExp = this.getMinExpansionLevel();
+
+        if ((this.player.shrinkLevel || 0) < minShrink) this.player.shrinkLevel = minShrink;
+        if ((this.player.expansionLevel || 0) < minExp) this.player.expansionLevel = minExp;
+
+        // --- 2. フラグ確定 ---
+        this.player.isLiberated = !!Object.values(this.equipment).find(item => 
+            item && (item.isLiberationProof || (item.passive && item.passive.isLiberationProof))
+        );
+
+        let addAtk = 0, addDef = 0, addInt = 0, addSpd = 0, addMaxHp = 0;
+        let statMultipliers = { atk: 1.0, def: 1.0, int: 1.0, spd: 1.0, hp: 1.0 };
+        let ignoreStripPenalty = false;
+
+        // --- 3. 装備ループ ---
+        Object.values(this.equipment).forEach(item => {
+            if (!item) return;
+
+            // 基礎値加算
+            addAtk += (item.atk || 0);
+            addDef += (item.def || 0);
+            addInt += (item.int || 0);
+            addSpd += (item.spd || 0);
+            addMaxHp += (item.hp || 0);
+
+            const p = item.passive || item; 
+
+            // 脱衣ペナルティ無効化
+            if (p.ignoreStripPenalty) ignoreStripPenalty = true;
+
+            // --- パッシブ倍率の適用 ---
+            
+            // A. 汎用倍率 (HP+20%などの mc_hp_up 系)
+            if (p.type === 'stat_mult' && p.stat && p.value) {
+                if (statMultipliers[p.stat]) statMultipliers[p.stat] *= p.value;
+            }
+
+            // B. 小人の魔法陣 (shrink_int)
+            if (p.type === 'shrink_int' && p.intMult) {
+                statMultipliers.int *= p.intMult;
+            }
+
+            // C. 複合ステータス補正 (ENDGAME_ITEMS や一部の魔法陣用)
+            if (p.stats) {
+                if (p.stats.atkMult) statMultipliers.atk *= p.stats.atkMult;
+                if (p.stats.defMult) statMultipliers.def *= p.stats.defMult;
+                if (p.stats.intMult) statMultipliers.int *= p.stats.intMult;
+                if (p.stats.spdMult) statMultipliers.spd *= p.stats.spdMult;
+                if (p.stats.hpMult)  statMultipliers.hp  *= p.stats.hpMult;
+            }
+
+            // D. 個別ID補正 (色欲など)
+            if (item.id === 'acc_lust_pendant') statMultipliers.def *= 1.2;
+            if (item.id === 'acc_lust_liberation') {
+                statMultipliers.int *= 1.5;
+                statMultipliers.spd *= 1.5;
             }
         });
 
-        // 3.5. 戦闘中の一時ステータス補正 (マナ縮小など)
-        if (this.player.battleStatsMod) {
-            addInt += this.player.battleStatsMod.int || 0;
-        }
-        // [拡張] ダンジョンボーナス
-        if (this.player.dungeonBonus) {
-            addAtk += this.player.dungeonBonus.atk || 0;
-            addInt += this.player.dungeonBonus.int || 0;
-        }
-        
-        // [修正] バフによる固定値補正の加算 (基礎ステータス計算前に行う)
-        this.player.buffs.forEach(buff => {
-            let isActive = true;
-            if (buff.condition && buff.condition.status) {
-                if (!this.player.currentStatus || this.player.currentStatus.id !== buff.condition.status) {
-                    isActive = false;
-                }
-            }
-            if (isActive && buff.buffStats) {
-                if (buff.buffStats.def) buffDef += buff.buffStats.def; // バフ分は分離
-                if (buff.buffStats.atk) addAtk += buff.buffStats.atk;
-                if (buff.buffStats.int) addInt += buff.buffStats.int;
-                if (buff.buffStats.hp) addMaxHp += buff.buffStats.hp;
-            }
-        });
-
-        // 基礎ステータス更新 (INTを先に計算)
-        let totalInt = this.playerBaseStats.int + addInt;
-        let totalAtk = this.playerBaseStats.atk + addAtk;
-        let totalDef = this.playerBaseStats.def + addDef;
-        let totalMaxHp = this.playerBaseStats.maxHp + addMaxHp;
-        let totalSpd = this.playerBaseStats.spd + addSpd;
-
-        // バフによるSPD補正
-        this.player.buffs.forEach(buff => {
-            let isActive = true;
-            if (buff.condition && buff.condition.status) {
-                if (!this.player.currentStatus || this.player.currentStatus.id !== buff.condition.status) {
-                    isActive = false;
-                }
-            }
-            if (isActive && buff.buffStats && buff.buffStats.spd) {
-                totalSpd += buff.buffStats.spd;
-            }
-        });
-
-        // [修正] デッキボーナス (倍率適用)
-        if (isUnique) {
-            totalInt = Math.floor(totalInt * 1.2); // Technician: INT +20%
-        }
-        if (isHeavy) {
-            totalDef = Math.floor(totalDef * 1.2); // Heavy: DEF +20%
+        // --- 4. 状態異常と変性計算 ---
+        if (this.player.hasStatus('undressing') && !ignoreStripPenalty) {
+            statMultipliers.def = 0; 
         }
 
-        // [拡張] デッキ内パッシブ (In-Deck Passives)
-        this.masterDeck.forEach(card => {
-            if (card.deckStatBonus) {
-                if (card.deckStatBonus.intRate) totalInt = Math.floor(totalInt * (1 + card.deckStatBonus.intRate));
-                if (card.deckStatBonus.atkRate) totalAtk = Math.floor(totalAtk * (1 + card.deckStatBonus.atkRate));
-            }
-        });
+        // 色欲コンボ
+        if (this.equipment.magic_circle && this.equipment.magic_circle.id === 'mc_lust') {
+            const hasCombo = !!Object.values(this.equipment).find(item => 
+                item && (item.id === 'acc_lust_pendant' || item.id === 'acc_lust_liberation')
+            );
+            this.player.expansionLevel = hasCombo ? 4 : 3;
+            if (!this.player.hasStatus('undressing')) this.player.addStatus('undressing', 99);
+        }
 
-        // アクセサリーのパッシブ効果（ステータス倍率）
-        if (this.equipment.accessory && this.equipment.accessory.passive) {
-            const p = this.equipment.accessory.passive;
-            if (p.type === 'stat_mod_restriction') {
-                if (p.stat === 'int') totalInt = Math.floor(totalInt * p.multiplier);
-                if (p.stat === 'atk') totalAtk = Math.floor(totalAtk * p.multiplier);
-            } else if (p.type === 'risk_stat_boost') {
-                if (p.multipliers.atk) totalAtk = Math.floor(totalAtk * p.multipliers.atk);
-                if (p.multipliers.int) totalInt = Math.floor(totalInt * p.multipliers.int);
-            } else if (p.type === 'conditional_boost') {
-                if (this.player.currentStatus?.id === 'fear') totalInt = Math.floor(totalInt * 1.5);
-                if (this.player.currentStatus?.id === 'distraction') totalAtk = Math.floor(totalAtk * 1.5);
-            } else if (p.type === 'shrink_lock') {
-                // 縮小レベル固定
-                if (this.player.shrinkLevel < p.minLevel) {
-                    this.player.shrinkLevel = p.minLevel;
-                    maxMinShrinkLevel = Math.max(maxMinShrinkLevel, p.minLevel);
-                    // 立ち絵更新が必要なため、UI更新をトリガーしたいが、
-                    // ここは計算中なのでフラグ管理か、updateStatsUIで再確認する
-                }
-                // ステータス倍率 (縮小ペナルティ計算前に適用するか後にするか。
-                // ここでは「基礎値に乗算」として扱うため、縮小ペナルティの影響を受ける)
-                if (p.stats.int) totalInt = Math.floor(totalInt * p.stats.int);
-                if (p.stats.atk) totalAtk = Math.floor(totalAtk * p.stats.atk);
-                
-                maxMinShrinkLevel = Math.max(maxMinShrinkLevel, p.minLevel);
-            } else if (p.type === 'stat_mult') {
-                if (p.stat === 'hp') totalMaxHp = Math.floor(totalMaxHp * p.value);
-                if (p.stat === 'atk') totalAtk = Math.floor(totalAtk * p.value);
-                if (p.stat === 'def') totalDef = Math.floor(totalDef * p.value);
-                if (p.stat === 'int') totalInt = Math.floor(totalInt * p.value);
+        // 膨張/縮小による最終補正
+        const expLv = this.player.expansionLevel || 0;
+        if (expLv === 4) { statMultipliers.atk *= 2.2; statMultipliers.spd *= 0.1; }
+        else if (expLv > 0) {
+            statMultipliers.atk *= (1.0 + 0.3 * expLv);
+            statMultipliers.spd *= Math.max(0.1, 1.0 - 0.3 * expLv);
+        }
+
+        const shrinkLv = this.player.shrinkLevel || 0;
+        if (shrinkLv > 0) {
+            const s = SHRINK_STATS[`LV${shrinkLv}`];
+            if (s) {
+                statMultipliers.atk *= s.atk;
+                statMultipliers.spd *= s.spdMult;
             }
         }
 
-        // [拡張] 汎用ステータス倍率適用 (ENDGAME_ITEMS)
-        totalAtk = Math.floor(totalAtk * statMultipliers.atk);
-        totalDef = Math.floor(totalDef * statMultipliers.def);
-        totalInt = Math.floor(totalInt * statMultipliers.int);
-        totalSpd = Math.floor(totalSpd * statMultipliers.spd);
-        totalMaxHp = Math.floor(totalMaxHp * statMultipliers.hp);
-        
-        // ▼ 追加: 膨張による補正 (Lv毎に ATK+30%, SPD-30%)
-        if (this.player.expansionLevel > 0) {
-            const level = this.player.expansionLevel;
-            totalAtk = Math.floor(totalAtk * (1.0 + (0.3 * level)));
-            totalSpd = Math.floor(totalSpd * Math.max(0.1, (1.0 - (0.3 * level)))); // 最低10%保証
-        }
+        // --- 5. 最終値確定 ---
+        this.player.maxHp = Math.floor((this.playerBaseStats.maxHp + addMaxHp) * statMultipliers.hp);
+        this.player.atk = Math.floor((this.playerBaseStats.atk + addAtk) * statMultipliers.atk);
+        this.player.def = Math.floor((this.playerBaseStats.def + addDef) * statMultipliers.def);
+        this.player.int = Math.floor((this.playerBaseStats.int + addInt) * statMultipliers.int);
+        this.player.spd = Math.floor((this.playerBaseStats.spd + addSpd) * statMultipliers.spd);
 
-        // [拡張] 解放の証 (Proof of Liberation)
-        if (this.equipment.accessory && this.equipment.accessory.isLiberationProof) {
-            totalInt = Math.floor(totalInt * 1.5);
-            totalSpd = Math.floor(totalSpd * 1.5);
-            // DEFは後で0にする
-        }
-
-        // 脱衣 (Undressing) - バフ加算前に適用
-        if (this.player.currentStatus && this.player.currentStatus.id === 'undressing') {
-            totalDef = 0;
-        }
-        // [拡張] 解放の証 (常時脱衣扱い)
-        if (this.equipment.accessory && this.equipment.accessory.isLiberationProof) {
-            totalDef = 0;
-        }
-
-        // 最終ステータス確定
-        this.player.int = totalInt;
-
-        // 4. バフ補正 (INT依存のスケール値のみここで計算)
-        let buffAtkScaled = 0;
-        this.player.buffs.forEach(buff => {
-            let isActive = true;
-            if (buff.condition && buff.condition.status) {
-                if (!this.player.currentStatus || this.player.currentStatus.id !== buff.condition.status) {
-                    isActive = false;
-                }
-            }
-            if (isActive && buff.buffStats && buff.buffStats.atkScale) {
-                buffAtkScaled += Math.floor(this.player.int * buff.buffStats.atkScale);
-            }
-        });
-
-        this.player.atk = totalAtk + buffAtkScaled;
-        this.player.def = totalDef + buffDef + (this.player.battleStatsMod.def || 0); // バフ分を加算
-        this.player.maxHp = totalMaxHp;
-        this.player.spd = totalSpd + (this.player.battleStatsMod.spd || 0);
-
-        // --- 縮小レベルの整合性チェック ---
-        // 装備による下限(maxMinShrinkLevel)と、呪い等による下限(player.minShrinkLevel)の大きい方を採用
-        const effectiveMin = Math.max(this.player.minShrinkLevel, maxMinShrinkLevel);
-
-        // 1. 下限チェック（常に適用）
-        // 現在のレベルが下限より小さいなら、強制的に引き上げる
-        if (this.player.shrinkLevel < effectiveMin) {
-            this.player.shrinkLevel = effectiveMin;
-        }
-        // 2. 解除チェック（拠点のみ適用）
-        // 拠点にいるなら、装備を外して下限が下がった時に、縮小レベルも下げる（元に戻す）
-        else if (this.isHome && this.player.shrinkLevel > effectiveMin) {
-            this.player.shrinkLevel = effectiveMin;
-        }
-
-        // --- 状態異常による補正 ---
-        // 縮小化 (Shrink)
-        // ※ shrink_lockアイテムがある場合、上で強制的にレベルが上がっている
-        // ここでペナルティ計算を行う
-        
-        // 縮小ペナルティ適用
-        if (this.player.shrinkLevel === 1) {
-            this.player.atk = Math.floor(this.player.atk * SHRINK_STATS.LV1.atk);
-            this.player.spd = Math.floor(this.player.spd * SHRINK_STATS.LV1.spdMult);
-        } else if (this.player.shrinkLevel === 2) {
-            this.player.atk = Math.floor(this.player.atk * SHRINK_STATS.LV2.atk);
-            this.player.spd = Math.floor(this.player.spd * SHRINK_STATS.LV2.spdMult);
-        } else if (this.player.shrinkLevel === 3) {
-            this.player.atk = Math.floor(this.player.atk * SHRINK_STATS.LV3.atk);
-            this.player.spd = Math.floor(this.player.spd * SHRINK_STATS.LV3.spdMult);
-        }
-
-        // HPが最大値を超えていたら調整（装備変更時など）
-        // [修正] HP全回復バグ防止: maxHpを超えた分だけカットし、回復はさせない
         if (this.player.hp > this.player.maxHp) this.player.hp = this.player.maxHp;
-
-        // UI更新
-        this.updateStatsUI();
     }
 
     // --- 編成画面ロジック ---
@@ -1440,6 +1292,9 @@ class BattleSystem {
     }
 
     renderEquipTab() {
+        // 1. 書き換え前に現在のスクロール位置を保存
+        const currentScroll = this.mgmtUi.content ? this.mgmtUi.content.scrollTop : 0;
+
         const slots = [
             { id: 'weapon', label: '武器 (Weapon)' },
             { id: 'armor', label: '防具 (Armor)' },
@@ -1448,6 +1303,11 @@ class BattleSystem {
         ];
 
         let leftHtml = `<h3>現在の装備</h3>`;
+        leftHtml += `
+            <div style="text-align:center; margin-bottom:10px;">
+                <button class="btn" onclick="game.equipBestGear()" style="font-size:12px; padding:5px 10px; background:#e67e22;">最強装備をセット</button>
+            </div>
+        `;
         
         slots.forEach(slot => {
             const item = this.equipment[slot.id];
@@ -1489,6 +1349,14 @@ class BattleSystem {
             <div class="mgmt-col">${leftHtml}</div>
             <div class="mgmt-col">${rightHtml}</div>
         `;
+
+        
+        // 2. 描画完了後、次の描画タイミングでスクロール位置を復元
+        if (this.mgmtUi.content) {
+            requestAnimationFrame(() => {
+                this.mgmtUi.content.scrollTop = currentScroll;
+            });
+        }
     }
 
     getItemStatsString(item) {
@@ -1511,6 +1379,9 @@ class BattleSystem {
     }
 
     renderDeckTab() {
+                // 1. 書き換え前に現在のスクロール位置を保存
+        const currentScroll = this.mgmtUi.content ? this.mgmtUi.content.scrollTop : 0;
+
         // デッキをID順にソート
         this.masterDeck.sort((a, b) => a.id.localeCompare(b.id));
 
@@ -1542,6 +1413,13 @@ class BattleSystem {
             <div class="mgmt-col">${leftHtml}</div>
             <div class="mgmt-col">${rightHtml}</div>
         `;
+
+        // 2. 描画完了後、次の描画タイミングでスクロール位置を復元
+        if (this.mgmtUi.content) {
+            requestAnimationFrame(() => {
+                this.mgmtUi.content.scrollTop = currentScroll;
+            });
+        }
     }
 
     addCardToDeck(poolIndex) {
@@ -1875,6 +1753,9 @@ class BattleSystem {
     // ダンジョン開始（Depth 1）
     startDungeon() {
         this.isHome = false;
+                
+        // ▼▼▼ 追加: 基礎ステータスをリセットして開始 ▼▼▼
+        this.resetPlayerBaseStats();
         document.getElementById('player-area').classList.remove('interactive');
 
         this.stopMessageTimer(); // 独り言停止
@@ -1904,8 +1785,81 @@ class BattleSystem {
     }
 
     // 次の階層へ
-    goNextFloor() {
+// 次のフロアへ進む（探索処理）
+    async goNextFloor() {
+        // 安全策: 戦利品画面を閉じる
+        const lootArea = document.getElementById('battle-loot-area');
+        if (lootArea) lootArea.style.display = 'none';
+
         this.depth++;
+        this.turnCount = 0; // ターンリセット
+        this.log(`地下 ${this.depth} 階に到達した。`);
+
+        // 10階層ごとにボス
+        if (this.depth % 10 === 0) {
+            this.encounterEnemy(true); // ボス戦
+            return;
+        }
+
+        // --- ランダム判定の重み付け ---
+        const eventRoll = Math.random();
+
+        // 1. 特殊状態イベント (15%)：脱衣 or 膨張Lv3以上
+        if (eventRoll < 0.15) {
+            if ((this.player.hasStatus('undressing') || this.player.isLiberated) && Math.random() < 0.5) {
+                await this.eventMagicMist(); // 魔力霧
+                return;
+            }
+            if (this.player.expansionLevel >= 3 && Math.random() < 0.5) {
+                await this.eventFleshWall(); // 肉壁
+                return;
+            }
+        }
+        
+        // 2. 汎用フレーバーイベント (25%)：何も起きない代わりにセリフが発生
+        // ※以前の「何もなさそうだ……」というログだけの処理を、セリフ付きイベントに差し替え
+        if (eventRoll < 0.40) { // 0.15 ～ 0.40 の範囲
+            this.processFlavorOnlyEvent(); 
+            return;
+        }
+
+        // 3. 残りの確率 (60%) で敵と遭遇
+        this.encounterEnemy();
+    }
+
+    // 新規追加: フレーバーのみのイベント（何も起きないが妖精が喋る）
+    processFlavorOnlyEvent() {
+        // 現在の状態に合わせたセリフ候補を取得
+        const candidates = this.getDungeonFlavorCandidates();
+        
+        if (candidates && candidates.length > 0) {
+            const event = candidates[Math.floor(Math.random() * candidates.length)];
+            
+            // ログにナレーションを表示
+            this.log(event.text);
+            // 吹き出しで妖精のセリフを表示
+            this.showFairyMessage(event.dialogue);
+        } else {
+            this.log("静かな通路が続いている……。");
+        }
+
+        // 探索ボタンを再描画して進行可能にする
+        this.renderDungeonButtons();
+    }
+
+    encounterEnemy(isBoss = false) {
+        // ▼ 追加: 戦利品エリアを隠し、敵グラフィックを復帰させる
+        const lootArea = document.getElementById('battle-loot-area');
+        if (lootArea) lootArea.style.display = 'none';
+        
+        if (this.ui.enemyGraphic) {
+            this.ui.enemyGraphic.style.display = 'flex'; // または block (CSSに合わせて)
+            this.ui.enemyGraphic.textContent = ""; // 以前のテキスト消去
+        }
+        const enemyIntent = document.getElementById('enemy-intent');
+        if (enemyIntent) enemyIntent.style.display = 'flex';
+        // ▲ 追加ここまで
+
         this.player.runStats.maxFloor = this.depth; // [Stats] 到達階層更新
         
         // ローグライクモードならハイスコア更新
@@ -1918,15 +1872,11 @@ class BattleSystem {
         this.ui.battleCommands.style.display = 'flex';
         this.menuUi.overlay.style.display = 'none'; // メニューを閉じる
 
-        // イベント発生判定 (20%)
-        if (Math.random() < 0.2) {
-            this.processEvent();
-            return;
-        }
-        
+        // ★★★ 修正: ここでデッキを再初期化する ★★★
+        this.deck.initializeDeck(this.masterDeck);
+
         // 敵生成（階層に応じて強化）
         const scale = 1 + (this.depth * 0.1); // 1階層ごとに10%強化
-        const isBoss = (this.depth % 5 === 0); // 5階層ごとにボス
         const name = isBoss ? `フロアボス (Lv.${this.depth})` : `モンスター (Lv.${this.depth})`;
         
         this.enemy = new Unit(
@@ -1942,10 +1892,9 @@ class BattleSystem {
         // 敵のルーチンと個性を適用
         this.applyEnemyRoutine(this.enemy, this.depth);
 
-        this.log(`=== 地下 ${this.depth} 階 ===`);
         this.log(`${this.enemy.name} が現れた！`);
         
-        // 開幕効果
+        // 開幕効果 (アクセサリ)
         if (this.equipment.accessory && this.equipment.accessory.passive) {
             const p = this.equipment.accessory.passive;
 
@@ -1990,6 +1939,14 @@ class BattleSystem {
                 this.player.heal(Math.floor(this.player.maxHp * mc.value));
             }
         }
+        // ▼ 追加: 1ターン目開始直前の完全リフレッシュ
+        // 前の戦闘のゴミを確実に消し、開幕効果(recalcStats内で処理されるもの)を適用する
+        this.player.battleStatsMod = { atk: 0, def: 0, int: 0, spd: 0 }; // 一時補正リセット
+        this.recalcStats();   // 現在の状態(装備・変性)で再計算
+        this.updateStatsUI(); // UIに即反映
+        
+        // 立ち絵も念のため更新
+        this.updateCharacterSprite();
 
         // 戦闘開始
         this.turn = 1;
@@ -2006,6 +1963,81 @@ class BattleSystem {
         this.planEnemyTurn(); // 初手敵の行動決定
         this.startPlayerTurn();
         this.saveGame(); // 階層移動セーブ
+    }
+
+    // --- 新規追加: 状態依存イベント ---
+
+    // イベント: 淫靡な魔力霧 (脱衣ボーナス)
+    async eventMagicMist() {
+        this.log("前方に、妖しく光るピンク色の霧が漂っている……");
+        await wait(800);
+
+        // 判定: 脱衣状態かどうか
+        // (解放の証を持っている場合も脱衣判定とみなす)
+        if (this.player.hasStatus('undressing') || this.player.isLiberated) {
+            this.log("遮る衣服がない肌が、霧の魔力を貪欲に吸収していく！");
+            this.ui.playerImg.classList.add('anim-speak'); // 喜びのアニメーション
+            await wait(1000);
+
+            // ボーナス: 最大HPアップ + 回復
+            const hpBonus = 10;
+            this.playerBaseStats.maxHp += hpBonus; // 基礎ステータスを強化
+            this.player.hp = this.player.maxHp;    // 全回復
+            
+            this.recalcStats();
+            this.updateStatsUI();
+            this.showToast(`魔力吸収！ 最大HP+${hpBonus} & 全回復！`, "success");
+            this.showFairyMessage("わぁ……！ すごい魔力です。体が熱くて、力が溢れてきます……！");
+        } else {
+            this.log("衣服を溶かす霧のようだ。危険を感じて引き返した。");
+            this.showFairyMessage("きゃっ、服が溶けちゃいそうです！ ここは通りたくないですね……。");
+        }
+
+        await wait(1000);
+        this.renderDungeonButtons();
+    }
+
+    // イベント: 肉塊のバリケード (膨張ボーナス)
+    async eventFleshWall() {
+        this.log("ブヨブヨとした肉塊が通路を塞いでいる……");
+        await wait(800);
+
+        // 判定: 膨張レベル3以上 (Lv3:ボール状, Lv4:限界)
+        if (this.player.expansionLevel >= 3) {
+            this.log("その巨体と重量で、肉の壁を押し潰して進んだ！");
+            // 画面を揺らす演出（既存のshakeクラスなどを利用）
+            document.body.classList.add('shake'); 
+            await wait(500);
+            document.body.classList.remove('shake');
+
+            this.log("壁の中からアイテムを発見した！");
+            
+            // 報酬: ランダムな装備品生成
+            const loot = this.generateLoot(); 
+            if (loot) {
+                // 戦利品画面を表示（以前作った汎用メソッドを使用）
+                // ※アイテムはインベントリに追加
+                if (loot.cost !== undefined) {
+                    this.cardPool.push(loot); // カードならプールへ
+                } else {
+                    this.tempInventory.push(loot); // 装備なら一時インベントリへ
+                }
+                this.showInlineResult([loot], "BREAK THROUGH!", 'normal');
+            }
+            
+            this.showFairyMessage("私のわがままボディなら、こんな壁なんてイチコロですよ～！ ……ふふん♪");
+            
+            // リザルト画面を出した場合は、ボタン表示は「閉じる」操作に含まれるためここでは呼ばない
+            // (showInlineResult後にボタンを出す仕様にしている場合は以下を実行)
+            if (typeof this.renderDungeonButtons === 'function') {
+                this.renderDungeonButtons();
+            }
+        } else {
+            this.log("今の体格では押し通れそうにない……。");
+            this.showFairyMessage("むぅ……通れませんね。もっと体が大きければ、押し潰して通れるんですけど。");
+            await wait(800);
+            this.renderDungeonButtons();
+        }
     }
 
     // 敵のルーチン適用ロジック
@@ -2056,19 +2088,22 @@ class BattleSystem {
         // --- フレーバーイベントを含むランダムイベントの抽選 ---
         const candidatePool = [
             ...DUNGEON_EVENT_DATA.event_trap,
-            ...DUNGEON_EVENT_DATA.flavor_normal
+            //古いイベント
+            //...DUNGEON_EVENT_DATA.flavor_normal
         ];
 
         if (this.player.shrinkLevel >= 1) {
             candidatePool.push(...DUNGEON_EVENT_DATA.event_small_hole);
-            candidatePool.push(...DUNGEON_EVENT_DATA.flavor_shrink);
+            //古いイベント
+            //candidatePool.push(...DUNGEON_EVENT_DATA.flavor_shrink);
         }
         if (this.player.shrinkLevel >= 2) {
             candidatePool.push(...DUNGEON_EVENT_DATA.event_shrink_penalty);
         }
         if (this.player.hasStatus('undressing') || (this.equipment.accessory && this.equipment.accessory.isLiberationProof)) {
             candidatePool.push(...DUNGEON_EVENT_DATA.event_stripped_penalty);
-            candidatePool.push(...DUNGEON_EVENT_DATA.flavor_stripped);
+            //古いイベント
+            //candidatePool.push(...DUNGEON_EVENT_DATA.flavor_stripped);
         }
 
         if (candidatePool.length === 0) {
@@ -2171,7 +2206,6 @@ class BattleSystem {
 
     processTreasureEvent() {
         this.log(`=== 地下 ${this.depth} 階 ===`);
-        this.log("宝箱を発見した！");
         
         // [修正] 合成専用カードを除外して抽選
         const candidates = CARD_DATABASE.filter(c => !c.isSynthesisOnly);
@@ -2187,12 +2221,19 @@ class BattleSystem {
         } else {
             this.tempInventory.push(loot);
         }
+
+        this.log(`宝箱から ${loot.name} を見つけた！`);
+
         
         // 戦闘コマンドを隠してシステムコマンドを表示
         this.ui.battleCommands.style.display = 'none';
         this.ui.systemCommands.style.display = 'flex';
         
-        this.showWinMenu(true, loot, "TREASURE");
+        // 戦闘画面のUIを使ってリザルト表示
+        this.showInlineResult([loot], "TREASURE");
+        
+        // その後、探索ボタンを表示
+        this.renderDungeonButtons();
     }
 
     // 帰還処理（生還）
@@ -2405,7 +2446,7 @@ class BattleSystem {
         this.isProcessingLog = false;
     }
 
-    // UI更新関連
+// UI更新 (ステータス表示)
     updateStatsUI() {
         const hpEl = this.ui.hpVal;
         const maxHpEl = this.ui.maxHpVal;
@@ -2421,8 +2462,6 @@ class BattleSystem {
 
         const pct = (this.player.hp / this.player.maxHp) * 100;
         this.ui.hpBar.style.width = `${pct}%`;
-        
-        // 色変化
         if (pct < 30) this.ui.hpBar.style.backgroundColor = '#e74c3c';
         else this.ui.hpBar.style.backgroundColor = '#2ecc71';
 
@@ -2431,72 +2470,93 @@ class BattleSystem {
 
         // ヘッダーのステータス数値更新
         if (this.ui.statAtk) this.ui.statAtk.textContent = this.player.atk;
-        
-        if (this.ui.statDef) {
-            this.ui.statDef.textContent = this.player.def;
-            // Heavy Bonus時は緑色
-            this.ui.statDef.style.color = this.activeBonuses.heavy ? '#2ecc71' : 'inherit';
-            this.ui.statDef.style.fontWeight = this.activeBonuses.heavy ? 'bold' : 'normal';
-        }
-
-        if (this.ui.statInt) {
-            this.ui.statInt.textContent = this.player.int;
-            // Unique Bonus時は青色
-            this.ui.statInt.style.color = this.activeBonuses.unique ? '#3498db' : 'inherit';
-            this.ui.statInt.style.fontWeight = this.activeBonuses.unique ? 'bold' : 'normal';
-        }
-
-        // SPD表示更新
+        if (this.ui.statDef) this.ui.statDef.textContent = this.player.def;
+        if (this.ui.statInt) this.ui.statInt.textContent = this.player.int;
         if (this.ui.statSpd) this.ui.statSpd.textContent = this.player.spd;
-
+        
         // フロア表示の更新
         const floorEl = document.getElementById('floor-display');
         if (floorEl) {
-            if (this.isHome) {
-                floorEl.textContent = "Home";
-            } else {
+            if (this.isHome) floorEl.textContent = "Home";
+            else {
                 let text = `Floor: ${this.depth}`;
-                if (this.mode === 'rogue') {
-                    text += ` (Best: ${this.rogueHighScore})`;
-                }
+                if (this.mode === 'rogue') text += ` (Best: ${this.rogueHighScore})`;
                 floorEl.textContent = text;
             }
         }
 
-        // ステータスアイコンの表示
+        // ▼ 変更: 状態異常バッジの更新 (ロジックは前回と同じだが、場所が変わったため再確認)
         const statusEl = document.getElementById('status-icon');
         if (statusEl) {
-            let statusText = '';
-            let statusClass = '';
+            let badgesHtml = '';
 
-            // 優先度1: 縮小 (これは解放中でもかかる)
+            // 1. 通常の状態異常
+            if (this.player.currentStatus) {
+                const s = this.player.currentStatus;
+                badgesHtml += `<span class="status-badge status-${s.id}">${s.name}</span>`;
+            }
+
+            // 2. 縮小化
             if (this.player.shrinkLevel > 0) {
-                statusText = `縮小 Lv${this.player.shrinkLevel}`;
-                statusClass = 'status-shrink';
-            }
-            // 優先度2: 通常の状態異常
-            else if (this.player.currentStatus) {
-                statusText = this.player.currentStatus.name;
-                statusClass = `status-${this.player.currentStatus.id}`;
-            }
-            // ▼ 追加: 解放の証による「脱衣」表示
-            else if (this.player.isLiberated) {
-                statusText = '脱衣(解放)';
-                statusClass = 'status-undressing';
+                badgesHtml += `<span class="status-badge status-shrink">縮小 Lv${this.player.shrinkLevel}</span>`;
             }
 
-            statusEl.textContent = statusText;
-            statusEl.className = `status-badge ${statusClass}`;
-            statusEl.style.display = statusText ? 'inline-block' : 'none';
+            // 3. 膨張
+            if (this.player.expansionLevel > 0) {
+                badgesHtml += `<span class="status-badge status-undressing">膨張 Lv${this.player.expansionLevel}</span>`;
+            }
+
+            // 4. 解放 (Liberation)
+            if (this.player.isLiberated) {
+                badgesHtml += `<span class="status-badge status-undressing">解放</span>`;
+            }
+
+            statusEl.innerHTML = badgesHtml;
+            // 右寄せレイアウトに対応したスタイルはHTML側で指定済み
         }
     }
-
-    // HP残量に応じて立ち絵の見た目を変える
+// HP残量に応じて立ち絵の見た目を変える
     updatePlayerExpression(hpPct) {
         if (!this.ui.playerImg) return; // 要素が存在しない場合は中断
 
+        // ▼▼▼ 修正: スケール計算を先に実行するように移動 ▼▼▼
+        // 3. 縮小化によるスケール変更
+        let scale = 1.0;
+        let yOffset = SHRINK_VISUALS.LV0.yOffset;
+
+        if (this.player.shrinkLevel === 1) {
+            scale = SHRINK_VISUALS.LV1.scale;
+            yOffset = SHRINK_VISUALS.LV1.yOffset;
+        }
+        if (this.player.shrinkLevel === 2) {
+            scale = SHRINK_VISUALS.LV2.scale;
+            yOffset = SHRINK_VISUALS.LV2.yOffset;
+        }
+        if (this.player.shrinkLevel === 3) {
+            scale = SHRINK_VISUALS.LV3.scale;
+            yOffset = SHRINK_VISUALS.LV3.yOffset;
+        }
+
+        // 変形基準点を足元（底辺中央）に設定
+        this.ui.playerImg.style.transformOrigin = 'bottom center';
+
+        // CSS変数をセットしてアニメーションに反映させる
+        this.ui.playerImg.style.setProperty('--fairy-scale', scale);
+        this.ui.playerImg.style.setProperty('--fairy-y', `${yOffset}px`);
+
+        // 重要: CSSのセンタリング(translateX(-50%))を維持しつつ scale を適用
+        // Y座標補正を追加
+        this.ui.playerImg.style.transform = `translateX(-50%) translateY(${yOffset}px) scale(${scale})`;
+
+        // CSSフィルタ（ドロップシャドウのみ適用）
+        this.ui.playerImg.style.filter = 'drop-shadow(0 0 5px rgba(255, 255, 255, 0.8))';
+        // ▲▲▲ 移動ここまで ▲▲▲
+
+
         let imageName = "";
-        const isLiberated = this.equipment.accessory && this.equipment.accessory.isLiberationProof;
+        const isLiberated= this.equipment.accessory && 
+                            (this.equipment.accessory.id === 'acc_liberation_proof' || 
+                             this.equipment.accessory.id === 'acc_lust_liberation');
         const safePct = (typeof hpPct === 'number') ? hpPct : 100;
 
         // 0. 膨張状態 (最優先)
@@ -2506,6 +2566,7 @@ class BattleSystem {
             this.updateCharacterSprite();
             return; // 膨張時は表情差分なし（または専用画像に含まれる）としてリターン
         }
+        
         // 1. 解放の証（覚醒）モード
         if (isLiberated) {
             if (safePct < 25) {
@@ -2537,42 +2598,9 @@ class BattleSystem {
         
         // 表示強制 (万が一 hidden になっていた場合)
         this.ui.playerImg.style.display = 'block';
-
-        // 3. 縮小化によるスケール変更
-        let scale = 1.0;
-        let yOffset = SHRINK_VISUALS.LV0.yOffset;
-
-        if (this.player.shrinkLevel === 1) {
-            scale = SHRINK_VISUALS.LV1.scale;
-            yOffset = SHRINK_VISUALS.LV1.yOffset;
-        }
-        if (this.player.shrinkLevel === 2) {
-            scale = SHRINK_VISUALS.LV2.scale;
-            yOffset = SHRINK_VISUALS.LV2.yOffset;
-        }
-        if (this.player.shrinkLevel === 3) {
-            scale = SHRINK_VISUALS.LV3.scale;
-            yOffset = SHRINK_VISUALS.LV3.yOffset;
-        }
-
-        // 変形基準点を足元（底辺中央）に設定
-        this.ui.playerImg.style.transformOrigin = 'bottom center';
-
-        // CSS変数をセットしてアニメーションに反映させる
-        this.ui.playerImg.style.setProperty('--fairy-scale', scale);
-        this.ui.playerImg.style.setProperty('--fairy-y', `${yOffset}px`);
-
-        // 重要: CSSのセンタリング(translateX(-50%))を維持しつつ scale を適用
-        // Y座標補正を追加
-        this.ui.playerImg.style.transform = `translateX(-50%) translateY(${yOffset}px) scale(${scale})`;
-
-        // CSSフィルタ（ドロップシャドウのみ適用）
-        this.ui.playerImg.style.filter = 'drop-shadow(0 0 5px rgba(255, 255, 255, 0.8))';
     }
-
+    
     updateDeckUI() {
-        this.ui.deckCount.textContent = this.deck.drawPile.length;
-        this.ui.discardCount.textContent = this.deck.discardPile.length;
     }
 
     // 敵の行動をあらかじめ決定する
@@ -2757,6 +2785,9 @@ class BattleSystem {
 
     // 手札リストの描画
     renderHandCards() {
+        // 1. スクロール位置を保存
+        const currentScroll = this.ui.cardList ? this.ui.cardList.scrollTop : 0;
+
         this.ui.cardList.innerHTML = '';
         this.deck.hand.forEach((card, index) => {
             const el = document.createElement('div');
@@ -2765,6 +2796,13 @@ class BattleSystem {
             el.onclick = () => this.playerUseCard(index);
             this.ui.cardList.appendChild(el);
         });
+
+        // 2. スクロール位置を復元
+        if (this.ui.cardList) {
+            requestAnimationFrame(() => {
+                this.ui.cardList.scrollTop = currentScroll;
+            });
+        }
     }
 
     // プレイヤーのアクション実行
@@ -2855,6 +2893,10 @@ class BattleSystem {
                         // 追加効果: デッキからランダム発動
                         await this.executeCardEffect({ type: 'special', id: 'chaos_gate' });
                     }
+                    if (this.equipment.magic_circle && this.equipment.magic_circle.curseOnArts) {
+    const artsCurse = Math.floor(dmg * this.equipment.magic_circle.curseOnArts);
+    this.applyCurseToEnemy(artsCurse);
+}
 
                     // [拡張] 被弾カウンター (Damage Counter)
                     if (this.enemy.counterStance && this.enemy.counterStance.type === 'damage') {
@@ -2963,7 +3005,9 @@ class BattleSystem {
 
                         // ダメージ適用
                         dmg = this.enemy.takeDamage(dmg);
-                        
+                        if (this.equipment.accessory && (this.equipment.accessory.curseAtk || (this.equipment.accessory.passive && this.equipment.accessory.passive.curseAtk))) {
+    this.applyCurseToEnemy(this.player.atk);
+}
                         if (hitCount > 1) {
                             this.log(`${i + 1}撃目: 敵に ${dmg} のダメージ！`);
                         } else {
@@ -3016,7 +3060,7 @@ class BattleSystem {
                     this.player.runStats.escapeCount++;
                     this.log("逃走成功！");
                     this.cleanupBattle(); // デッキ等のリセット
-                    this.showWinMenu(false); // 逃走はドロップなしでリザルトへ
+                    this.processEscape()
                     return;
                 } else {
                     this.log("逃走失敗...！隙を見せてしまった。");
@@ -3143,6 +3187,9 @@ class BattleSystem {
         } else if (card.type === 'heal') {
             this.player.heal(card.power);
             this.log(`HPが ${card.power} 回復した！`);
+            if (this.equipment.magic_circle && this.equipment.magic_circle.curseOnHeal) {
+        this.applyCurseToEnemy(amount);
+    }
             this.updateStatsUI();
         } else if (card.type === 'buff' || card.type === 'buff_turn' || card.type === 'buff_special') {
             if (card.type === 'buff') {
@@ -3285,6 +3332,78 @@ class BattleSystem {
                 this.log(`敵に ${dmg} のダメージ！`);
                 this.animateEnemyDamage();
             }
+        } else if (card.type === 'buff_lust') {
+            this.log("妖艶な魔力が体を包み込む！");
+            this.player.addBuff({
+                type: 'buff_special',
+                buffId: 'dmg_cut',
+                value: 0.5,
+                duration: 3,
+                name: '魔性の防壁'
+            });
+            
+            const expLv = this.player.expansionLevel || 0;
+            if (this.player.hasStatus('undressing') || this.player.isLiberated || expLv > 0) {
+                this.processExpansion(1);
+            } else {
+                this.processForceStrip();
+            }
+        } else if (card.type === 'attack_lust_atk') {
+            const expLv = this.player.expansionLevel || 0;
+            const rawDmg = Math.floor(this.player.atk * (expLv + 1));
+            const dmg = this.enemy.takeDamage(rawDmg);
+            this.log(`${this.enemy.name}に ${dmg} の膨張ダメージ！`);
+            this.animateEnemyDamage();
+        } else if (card.type === 'special_charm') {
+            const recoil = Math.floor(this.player.hp * 0.5);
+            this.player.hp = Math.max(0, this.player.hp - recoil);
+            this.updateStatsUI();
+            this.log(`体力を ${recoil} 消費して誘惑を放つ！`);
+            
+            if (this.enemy.isBoss) {
+                this.log("ボスには効かなかった！");
+            } else {
+                const expLv = this.player.expansionLevel || 0;
+                const successRate = 0.2 + (expLv * 0.2);
+                if (Math.random() < successRate) {
+                    this.log(`${this.enemy.name}は戦意を失い、こちらを見つめている……`);
+                    await wait(1000);
+                    this.processWin();
+                    return;
+                } else {
+                    this.log("敵は誘惑を振り払った！");
+                }
+            }
+        } else if (card.type === 'attack_heavy_press') {
+            const expLv = this.player.expansionLevel || 0;
+            const rawDmg = Math.floor(this.player.atk * expLv * 1.5);
+            const dmg = this.enemy.takeDamage(rawDmg);
+            this.log(`${this.enemy.name}を巨大な胸で押し潰した！ ${dmg} ダメージ！`);
+            this.animateEnemyDamage();
+            this.player.skipTurn = true;
+        } else if (card.type === 'attack_vs_intent') {
+            let powerMult = 2.0;
+            const enemyIntent = this.enemyNextAction ? this.enemyNextAction.type : null;
+            
+            let isMatch = (enemyIntent === card.targetIntent);
+            if (card.targetIntent === 'attack' && enemyIntent === 'strong_attack') isMatch = true;
+
+            if (isMatch) {
+                powerMult = 4.0;
+                if (card.targetIntent === 'defend') {
+                    this.enemy.isDefending = false;
+                    this.log("敵のガードを粉砕した！");
+                } else {
+                    this.log("敵の隙を突くカウンター！");
+                }
+            }
+            
+            const rawDmg = Math.floor(this.player.int * powerMult);
+            const dmgVal = calculateMagicDamage(rawDmg, this.enemy.int);
+            const finalDmg = this.enemy.takeDamage(dmgVal, true); // 魔法なので物理防御無視
+            
+            this.log(`${this.enemy.name}に ${finalDmg} の特効魔法ダメージ！`);
+            this.animateEnemyDamage();
         } else if (card.type === 'none') {
             this.log("しかし何も起こらなかった...");
         }
@@ -3369,6 +3488,14 @@ class BattleSystem {
                     }
                 }
             });
+
+            // BattleSystem.js の endPlayerTurn 内、毒ダメージ処理の付近
+if (this.enemy && this.enemy.curse > 0) {
+    const curseDmg = this.enemy.curse;
+    this.enemy.takeDamage(curseDmg, true); // 防御無視ダメージ
+    this.log(`呪いの蝕み！ ${this.enemy.name}に ${curseDmg} のダメージ！`);
+    this.enemy.curse = Math.floor(this.enemy.curse / 2); // 呪いを半減
+}
         }
 
         // [拡張] デッキ内パッシブ (ターン終了時効果)
@@ -3440,6 +3567,12 @@ class BattleSystem {
 
     // --- 敵のターン処理 ---
     async processEnemyTurn() {
+        // 勝利処理が先行した場合、敵はnullになっているためターンを即時終了
+        if (!this.enemy) {
+            console.log("processEnemyTurn: 敵が存在しないため処理を中断しました。");
+            return;
+        }
+
         this.log("敵のターン...");
         await wait(800);
         this.enemy.isDefending = false; // 防御状態リセット
@@ -3564,20 +3697,24 @@ class BattleSystem {
 
     // 戦闘終了時のクリーンアップ
     cleanupBattle() {
-        this.deck.reset();
-        this.updateDeckUI();
-        this.ui.cardList.innerHTML = ''; // 手札表示をクリア
+        this.inBattle = false;
+        this.enemy = null;
+        this.turnCount = 0;
 
-        // 戦闘終了時の状態異常リカバリー (縮小以外を解除)
-        this.player.expansionLevel = 0; // 膨張解除
+        // ▼ 修正: 戦闘用ステータスの完全リセット
+        this.player.isDefending = false;
+        this.player.weaponCharge = false;
+        
+        this.player.buffs = []; 
+
+        // 戦闘中の一時補正をリセット
+        this.player.battleStatsMod = { atk: 0, def: 0, int: 0, spd: 0 };
+
+        this.deck.hand = [];
+        this.deck.discardPile = [];
+        this.deck.drawPile = []; // 必要なら reshuffle するが、次は startBattle で初期化されるはず
+
         this.player.currentStatus = null;
-        this.updateStatsUI();
-        this.player.buffs = []; // バフ全解除
-        // ▼ 追加: 防壁の持ち越しペナルティ (50%に減衰) ▼
-        if (this.player.barrier > 0) {
-            this.player.barrier = Math.floor(this.player.barrier * 0.5);
-        }
-        // ▲ 追加ここまで ▲
 
         // 戦闘用一時ステータスのリセット
         this.player.battleStatsMod = { atk: 0, def: 0, int: 0, spd: 0 };
@@ -3587,57 +3724,230 @@ class BattleSystem {
         // ▼ 追加: 混沌の報酬フラグをリセット
         this.chaosRewardCard = false; // 追加カード獲得フラグ
         this.chaosLootMod = 0;        // ドロップ補正値加算
+        
+        // ▼ 追加: 即座に再計算して探索状態のステータスを表示する
+        this.recalcStats();
+        this.updateStatsUI();
+        this.updateCharacterSprite(); // 通常立ち絵に戻す(ピンチ顔などの解除)
+
+        this.ui.battleCommands.style.display = 'none';
+        this.ui.systemCommands.style.display = 'none';
     }
 
-    processWin() {
-        this.log("敵を撃破した！");
-        this.cleanupBattle(); // デッキ等のリセット
+// 勝利処理
+    async processWin() {
+        if (!this.enemy) {
+            this.cleanupBattle();
+            this.showHome();
+            return;
+        }
+
+        const isBoss = this.enemy.isBoss;
+        const enemyName = this.enemy.name;
+
+        // ログ出力
+        this.log(`${enemyName}を倒した！`);
         
-        // ドロップ生成
-        // ▼ 追加: 混沌の効果による追加カード報酬
-        if (this.chaosRewardCard) {
-            const randomCard = CARD_DATABASE[Math.floor(Math.random() * CARD_DATABASE.length)];
-            if (randomCard) {
-                // コピーを作成して追加
-                const newCard = JSON.parse(JSON.stringify(randomCard));
-                this.permInventory.push(newCard);
-                this.log(`混沌の報酬: カード『${newCard.name}』を獲得！`);
-            }
+        // 演出
+        if (this.ui.enemyGraphic) {
+            this.ui.enemyGraphic.classList.add('defeat-anim');
         }
 
-        const loot = this.generateLoot();
+        // --- 演出待ち (短縮) ---
+        setTimeout(() => {
+            let dropNum = 1;
+            if (isBoss) dropNum += 2;
 
-        // 魔法陣: 階層スキップ
-        if (this.equipment.magic_circle && this.equipment.magic_circle.passive.type === 'win_skip_floor') {
-            if (Math.random() < 0.1) {
-                this.depth++;
-                this.log("魔法陣が輝き、階層が転移した！");
+            const currentLoot = [];
+
+            // ドロップ生成
+            for (let i = 0; i < dropNum; i++) {
+                if (typeof this.generateLoot === 'function') {
+                    const loot = this.generateLoot(isBoss);
+                    if (loot) {
+                        this.tempInventory.push(loot);
+                        currentLoot.push(loot);
+                    }
+                }
             }
+            if (isBoss) this.log("エリアボスを撃破した！");
+
+            // --- 画面切り替え待ち (さらに短縮) ---
+            setTimeout(() => {
+                this.cleanupBattle(); 
+                this.inBattle = false;
+
+                this.ui.battleCommands.style.display = 'none';
+                this.ui.systemCommands.style.display = 'flex';
+                this.ui.enemyGraphic.classList.remove('defeat-anim');
+
+                // ★変更: 汎用メソッド呼び出し
+                this.showInlineResult(currentLoot, "VICTORY");
+
+                if (typeof this.renderDungeonButtons === 'function') {
+                    this.renderDungeonButtons();
+                } else {
+                    this.showHome();
+                }
+                
+                this.saveGame();
+
+            }, 400); // 800ms -> 400ms に短縮
+
+        }, 600); // 最初の待ちも 800ms -> 600ms 程度に短縮
+    }
+
+
+    // 逃走処理
+    async processEscape(isSmokeBomb = false) {
+        // 成功判定 (煙玉なら必ず成功)
+        // ※既存の判定ロジックがあれば維持してください。ここでは簡易実装です。
+        const success = isSmokeBomb || (Math.random() < 0.8); // 仮: 80%
+
+        if (!success) {
+            this.log("逃げられなかった！");
+            await wait(500);
+            this.processEnemyTurn();
+            return;
         }
 
-        // [修正] ローグライクモードなら即時入手
-        if (this.mode === 'rogue') {
-            if (loot.cost !== undefined) {
-                this.cardPool.push(loot); // カードの場合
-            } else {
-                this.permInventory.push(loot); // 装備の場合
-            }
+        // 成功時
+        this.log(isSmokeBomb ? "煙玉を使って逃げ出した！" : "逃走に成功した！");
+        
+        // 逃走アニメーション (敵がフェードアウト)
+        if (this.ui.enemyGraphic) {
+            this.ui.enemyGraphic.classList.add('escape-anim');
+        }
+
+        // 演出待ち
+        await wait(600);
+
+        // クリーンアップ
+        this.cleanupBattle();
+        this.inBattle = false;
+
+        // UIリセット
+        this.ui.battleCommands.style.display = 'none';
+        this.ui.systemCommands.style.display = 'flex';
+        this.ui.enemyGraphic.classList.remove('escape-anim');
+        
+        // ★変更: 「ESCAPE」リザルトを表示
+        this.showInlineResult([], "ESCAPE", "escape");
+
+        // 次の選択肢へ
+        if (typeof this.renderDungeonButtons === 'function') {
+            this.renderDungeonButtons();
         } else {
-            this.tempInventory.push(loot);
+            this.showHome();
         }
-
-        // [専用ルールB] ボス撃破ボーナス
-        if (this.enemy.isBoss && this.mode === 'rogue') {
-            this.restCount++;
-            this.showToast("ボス撃破ボーナス！ 休憩回数が増えました！", "success");
-        }
-        this.saveGame(); // 勝利時セーブ
         
-        this.showWinMenu(true, loot);
+        this.saveGame();
     }
+
+    // リザルト画面を閉じて、次へ進む
+    closeBattleResult() {
+        const overlay = document.getElementById('battle-result-overlay');
+        if (overlay) overlay.style.display = 'none';
+
+        // 画面リセット
+        this.ui.battleCommands.style.display = 'none';
+        this.ui.systemCommands.style.display = 'flex';
+        this.ui.enemyGraphic.classList.remove('defeat-anim');
+        this.ui.enemyGraphic.textContent = "";
+
+        // 探索コマンドの描画
+        if (typeof this.renderDungeonButtons === 'function') {
+            this.renderDungeonButtons();
+        } else {
+            this.showHome();
+        }
+        
+        this.log("探索を続けますか？");
+        this.saveGame();
+    }
+    
+// インラインリザルト表示 (汎用・スタイル対応版)
+    showInlineResult(lootList, titleText = "GET ITEMS", type = 'normal') {
+        const lootArea = document.getElementById('battle-loot-area');
+        const enemyGraph = document.getElementById('enemy-graphic');
+        const enemyIntent = document.getElementById('enemy-intent');
+
+        if (!lootArea) return;
+
+        // 敵表示などを隠す
+        if (enemyGraph) enemyGraph.style.display = 'none';
+        if (enemyIntent) enemyIntent.style.display = 'none';
+
+        // 表示
+        lootArea.style.display = 'block';
+        lootArea.innerHTML = '';
+
+        // タイトル
+        const title = document.createElement('div');
+        title.className = 'inline-loot-title';
+        title.textContent = titleText;
+        
+        // ▼ タイプによって色を変える
+        if (type === 'escape') {
+            title.classList.add('escape-mode');
+        }
+        
+        lootArea.appendChild(title);
+
+        if (!lootList || lootList.length === 0) {
+            const emptyMsg = document.createElement('div');
+            // 逃走時はメッセージを変える
+            if (type === 'escape') {
+                emptyMsg.textContent = "安堵感を得た...";
+            } else {
+                emptyMsg.textContent = "獲得アイテムなし";
+            }
+            emptyMsg.style.textAlign = "center";
+            emptyMsg.style.color = "#777";
+            emptyMsg.style.padding = "20px";
+            lootArea.appendChild(emptyMsg);
+        } else {
+            // (既存のアイテム表示ループ)
+            lootList.forEach(item => {
+                const div = document.createElement('div');
+                div.className = 'inline-loot-item';
+                
+                if (item.plusValue >= 5 || item.type === 'magic_circle' || (item.id && item.id.startsWith('acc_'))) {
+                    div.classList.add('inline-loot-rare');
+                }
+
+                let descText = "";
+                if (item.passive) descText = item.passive.desc || item.passive.name;
+                else if (item.desc) descText = item.desc;
+                else {
+                    let stats = [];
+                    if (item.atk) stats.push(`ATK+${item.atk}`);
+                    if (item.def) stats.push(`DEF+${item.def}`);
+                    if (item.int) stats.push(`INT+${item.int}`);
+                    if (item.spd) stats.push(`SPD+${item.spd}`);
+                    if (item.hp)  stats.push(`HP+${item.hp}`);
+                    descText = stats.join(', ');
+                }
+
+                let icon = '📦';
+                if (item.type === 'magic_circle') icon = '🔯';
+                else if (item.type === 'accessory') icon = '💍';
+                else if (item.type === 'card' || item.cost !== undefined) icon = '🃏';
+                else if (item.type === 'weapon') icon = '⚔️';
+                else if (item.type === 'armor') icon = '🛡️';
+
+                div.innerHTML = `
+                    <div class="inline-loot-name">${icon} ${item.name}</div>
+                    <div class="inline-loot-desc">${descText}</div>
+                `;
+                lootArea.appendChild(div);
+            });
+        }
+    }
+// BattleSystem.js - generateLoot メソッドの修正
 
     // ドロップ生成ロジック
-    generateLoot() {
+    generateLoot(isBoss = false) {
         // ドロップ率の重み付け初期値
         let weights = { weapon: 35, armor: 35, accessory: 15, magic_circle: 15 };
 
@@ -3645,13 +3955,11 @@ class BattleSystem {
         if (this.equipment.magic_circle) {
             const mc = this.equipment.magic_circle.passive;
             if (mc.type === 'drop_rate_mod') {
-                // 対象の重みを大幅に増やす (+50)
                 if (weights[mc.target]) weights[mc.target] += 50;
             }
-            // カード化 (20%)
             if (mc.type === 'win_card_loot' && Math.random() < mc.chance) {
                 const card = CARD_DATABASE[Math.floor(Math.random() * CARD_DATABASE.length)];
-                card.cost = 0; // 念のため
+                card.cost = 0; 
                 return card; 
             }
         }
@@ -3665,17 +3973,8 @@ class BattleSystem {
         else if (r < weights.weapon + weights.armor + weights.accessory) type = 'accessory';
         else type = 'magic_circle';
 
-        // [調整] ローグライクモードかつ浅層(30階未満)では「小人の留め針」を出さない
-        // generateLoot内でアイテムIDを直接指定して生成するわけではないが、
-        // accessory生成時にフィルタリングが必要。
-        // 現在のロジックでは ACCESSORY_EFFECTS からランダムに選んでいるため、
-        // 候補リストを作成する段階でフィルタリングを行う。
-
         let item = { type: type, level: this.depth };
 
-        // 素材ランクの決定
-        // 深度に応じてTierを選択 (簡易マッピング)
-        // 幸運の星(dropQualityBonus)があれば深度を加算して判定
         const effectiveDepth = this.depth + (this.player.dropQualityBonus || 0);
         let tierIndex = 0;
         if (effectiveDepth >= 50) tierIndex = 5;
@@ -3688,25 +3987,21 @@ class BattleSystem {
         const power = tier.power;
 
         if (type === 'weapon') {
-            // 武器種別をランダム選択
             const wKeys = Object.keys(WEAPON_TYPES);
             const wKey = wKeys[Math.floor(Math.random() * wKeys.length)];
             const wType = WEAPON_TYPES[wKey];
             
-            item.id = `gen_weapon_${tierIndex}_${wKey}`; // ID付与
+            item.id = `gen_weapon_${tierIndex}_${wKey}`;
             item.name = `${tier.name}${wType.name}`;
             item.atk = 0; item.int = 0; item.def = 0; item.hp = 0; item.spd = 0;
 
-            // メインステータス計算
             const mainVal = Math.floor(power * wType.mod);
             if (wType.stat === 'atk') item.atk = mainVal;
             if (wType.stat === 'int') item.int = mainVal;
             if (wType.stat === 'def') item.def = mainVal;
 
-            // サブステータス計算
             if (wType.sub) {
                 Object.keys(wType.sub).forEach(key => {
-                    // 1 Power = 1 Stat (HPは5倍)
                     let val = Math.floor(power * wType.sub[key]);
                     if (key === 'hp') val = Math.floor(power * wType.sub[key] * 5);
                     item[key] = (item[key] || 0) + val;
@@ -3714,72 +4009,58 @@ class BattleSystem {
             }
         } 
         else if (type === 'armor') {
-            // 防具種別をランダム選択
             const aKeys = Object.keys(ARMOR_TYPES);
             const aKey = aKeys[Math.floor(Math.random() * aKeys.length)];
             const aType = ARMOR_TYPES[aKey];
 
-            item.id = `gen_armor_${tierIndex}_${aKey}`; // ID付与
+            item.id = `gen_armor_${tierIndex}_${aKey}`;
             item.name = `${tier.name}${aType.name}`;
             item.atk = 0; item.int = 0; item.def = 0; item.hp = 0; item.spd = 0;
 
-            // ステータス計算
-            // modがオブジェクトか数値かで分岐
             const isModObj = (typeof aType.mod === 'object');
             
             aType.main.forEach(statKey => {
                 let multiplier = isModObj ? (aType.mod[statKey] || aType.mod.others || 1.0) : aType.mod;
                 let val = Math.floor(power * multiplier);
-                if (statKey === 'hp') val *= 5; // HPは係数5倍
+                if (statKey === 'hp') val *= 5;
                 item[statKey] = (item[statKey] || 0) + val;
             });
         } 
         else if (type === 'accessory') {
-            // ランダムでパッシブ効果を選択
-            let candidates = ACCESSORY_EFFECTS;
+            // ▼ 修正: isUnique: true のアイテムを除外するフィルタを追加
+            let candidates = ACCESSORY_EFFECTS.filter(e => !e.isUnique);
             
-            // [調整] ドロップ制限
             if (this.mode === 'rogue' && this.depth < 30) {
                 candidates = candidates.filter(e => !e.id.startsWith('pin_small'));
             }
 
             const effect = candidates[randomInt(0, candidates.length - 1)];
-            item.id = effect.id; // アクセサリーは効果IDを使用
+            item.id = effect.id;
             item.name = effect.name;
             item.passive = effect;
-            item.atk = 0;
-            item.int = 0;
-            item.def = 0;
-            item.hp = 0;
-            item.spd = 0;
+            item.atk = 0; item.int = 0; item.def = 0; item.hp = 0; item.spd = 0;
         } else if (type === 'magic_circle') {
             const effect = MAGIC_CIRCLE_DATABASE[Math.floor(Math.random() * MAGIC_CIRCLE_DATABASE.length)];
             item.id = effect.id;
             item.name = effect.name;
             item.passive = effect;
-            // 魔法陣は基本ステータス0
             item.atk=0; item.def=0; item.int=0; item.hp=0; item.spd=0;
         }
 
         // 強化値 (+X) システム
         let plusVal = 0;
         if (this.mode === 'rogue') {
-            // [専用ルールC] ローグライクモードの計算式
             const base = Math.floor(this.depth / 10);
-            const variance = Math.floor(Math.random() * 7) - 3; // -3 ~ +3
+            const variance = Math.floor(Math.random() * 7) - 3;
             plusVal = base + variance;
             if (plusVal < 0) plusVal = 0;
         } else {
-            // 通常モード
             plusVal = Math.floor(this.depth / 3);
         }
 
-        // 鍛冶の魔法陣 (補正値+1)
         if (this.equipment.magic_circle && this.equipment.magic_circle.passive.type === 'loot_plus_mod') {
             plusVal += 1;
         }
-
-        // ▼ 追加: 混沌の効果による補正値加算
         if (this.chaosLootMod) {
             plusVal += this.chaosLootMod;
         }
@@ -3799,17 +4080,20 @@ class BattleSystem {
             }
         }
 
-        // 安全策: IDが設定されなかった場合のフォールバック
-        if (!item.id) {
-            console.error("生成されたアイテムにIDがありません！", item);
-            // 緊急回避: ランダムなユニークIDを付与するか、強制的にエラーを防ぐ
-            item.id = `fallback_${type}_${Date.now()}`;
-        }
-
         return item;
     }
 
-    // リザルトセリフ判定ロジック
+    // BattleSystem.js 内
+applyCurseToEnemy(amount) {
+    if (!this.enemy) return;
+    this.enemy.addCurse(amount);
+    
+    // 装飾品：呪い増幅 (1.2倍)
+    if (this.equipment.accessory && (this.equipment.accessory.curseBoost || (this.equipment.accessory.passive && this.equipment.accessory.passive.curseBoost))) {
+        this.enemy.curse = Math.floor(this.enemy.curse * 1.2);
+    }
+}
+        // リザルトセリフ判定ロジック
     checkResultDialogue(player, inventory) {
         // 1. Loot Check (Plus Value)
         let maxPlus = 0;
@@ -4070,6 +4354,7 @@ class BattleSystem {
     async executeChaos(baseCount) {
         let count = baseCount;
         
+        // 回数増加ボーナスの計算
         if (this.equipment.accessory) {
             if (this.equipment.accessory.passive.type === 'chaos_reflector') count += 3;
             if (this.equipment.accessory.passive.type === 'chaos_healer') count += 5;
@@ -4090,38 +4375,38 @@ class BattleSystem {
             loopSafety--;
             await wait(200); // 演出用ウェイト
 
+            // 強欲の杯 (回復)
             if (this.equipment.accessory && this.equipment.accessory.passive.type === 'chaos_healer') {
                 const healVal = Math.floor(this.player.maxHp * 0.2);
                 this.player.heal(healVal);
             }
 
-            // 効果テーブル (重み付けなしの等確率なら配列からランダム)
-            const roll = randomInt(1, 19);
-            
-            // this.log(`[混沌] 効果発動 (${remaining + 1}回残り)...`);
+            // ▼ 変更: 抽選範囲を 1~21 に拡大
+            const roll = randomInt(1, 21);
 
             switch (roll) {
-                case 1: // ATK+100% (3T)
+                // Case 1~16 (省略: 変更なし)
+                case 1: 
                     this.player.addBuff({ type: 'stat_up', buffStats: { atkScale: 1.0 }, duration: 3, name: '混沌の怪力', desc: 'ATK+100%' });
                     this.log("混沌の怪力！(ATK+100%)");
                     break;
-                case 2: // DEF+100% (3T)
+                case 2: 
                     this.player.addBuff({ type: 'stat_up', buffStats: { def: this.player.def }, duration: 3, name: '混沌の硬化', desc: 'DEF+100%' });
                     this.log("混沌の硬化！(DEF+100%)");
                     break;
-                case 3: // INT+100% (3T)
+                case 3: 
                     this.player.addBuff({ type: 'stat_up', buffStats: { intScale: 1.0 }, duration: 3, name: '混沌の知性', desc: 'INT+100%' });
                     this.log("混沌の知性！(INT+100%)");
                     break;
-                case 4: // SPD+100% (3T)
+                case 4: 
                     this.player.addBuff({ type: 'stat_up', buffStats: { spd: this.player.spd }, duration: 3, name: '混沌の加速', desc: 'SPD+100%' });
                     this.log("混沌の加速！(SPD+100%)");
                     break;
-                case 5: // 回避+30% (3T)
+                case 5: 
                     this.player.addBuff({ type: 'evasion_up', val: 30, duration: 3, name: '混沌の幻影', desc: '回避率+30%' });
                     this.log("混沌の幻影！(回避+30%)");
                     break;
-                case 6: // ATKランダムダメージ (0.5~3.0倍)
+                case 6: 
                     {
                         const rate = (randomInt(50, 300) / 100);
                         const dmg = Math.floor(this.player.atk * rate);
@@ -4130,7 +4415,7 @@ class BattleSystem {
                         this.animateEnemyDamage();
                     }
                     break;
-                case 7: // INTランダムダメージ (0.5~3.0倍)
+                case 7: 
                     {
                         const rate = (randomInt(50, 300) / 100);
                         const dmg = Math.floor(this.player.int * rate);
@@ -4139,7 +4424,7 @@ class BattleSystem {
                         this.animateEnemyDamage();
                     }
                     break;
-                case 8: // 固定1ダメージ (ランダムテキスト)
+                case 8: 
                     {
                         const texts = ["小石につまづいて敵にぶつかった！", "デコピンがヒット！", "威嚇したら敵が少しビビった！", "投げキッスが直撃！"];
                         this.enemy.takeDamage(1);
@@ -4147,7 +4432,7 @@ class BattleSystem {
                         this.animateEnemyDamage();
                     }
                     break;
-                case 9: // 自傷50%
+                case 9: 
                     {
                         const selfDmg = Math.floor(this.player.maxHp * 0.5);
                         if (this.equipment.accessory && this.equipment.accessory.passive.type === 'chaos_reflector') {
@@ -4165,22 +4450,22 @@ class BattleSystem {
                         }
                     }
                     break;
-                case 10: // 勝利時カード獲得
+                case 10: 
                     this.chaosRewardCard = true;
                     this.log("空間が歪み、新たなカードの気配がする…");
                     break;
-                case 11: // 勝利時装備補正+1
+                case 11: 
                     this.chaosLootMod = (this.chaosLootMod || 0) + 1;
                     this.log("運命が書き換わり、財宝の質が高まった気がする…");
                     break;
-                case 12: // 縮小化+3 (ランダムテキスト)
+                case 12: 
                     {
                         const texts = ["体が急激に縮んでいく！", "視界が巨大化した！？ いや、私が小さくなったのか！", "まるで人形のようなサイズに！"];
                         this.log(texts[randomInt(0, texts.length - 1)]);
                         this.player.shrinkLevel = Math.min(3, this.player.shrinkLevel + 3);
                     }
                     break;
-                case 13: // 通常攻撃 (回数反映)
+                case 13: 
                     {
                         this.log("体が勝手に動き出し、武器を振るった！");
                         let hitCount = 1;
@@ -4188,6 +4473,7 @@ class BattleSystem {
                         if (this.equipment.magic_circle && this.equipment.magic_circle.passive && this.equipment.magic_circle.passive.type === 'status_attack_plus' && this.player.currentStatus) hitCount += 1;
                         const multiHitBuff = this.player.buffs.find(b => b.type === 'multi_hit');
                         if (multiHitBuff) hitCount += 2;
+                        if (this.equipment.magic_circle && this.equipment.magic_circle.passive && this.equipment.magic_circle.passive.type === 'expansion_multi_hit') hitCount += this.player.expansionLevel;
 
                         for(let i=0; i<hitCount; i++) {
                             if (i > 0) await wait(100);
@@ -4200,7 +4486,7 @@ class BattleSystem {
                         }
                     }
                     break;
-                case 14: // 武器必殺技
+                case 14: 
                     {
                         this.log("武器の奥義が勝手に発動する！");
                         let dmg = Math.floor(this.player.atk * 2.5);
@@ -4221,10 +4507,19 @@ class BattleSystem {
                     this.player.addStatus('poison');
                     this.log("毒霧を吸い込んでしまった！");
                     break;
-                case 17: // 脱衣 (ランダムテキスト)
-                    this.processForceStrip();
+                // ▼ 変更: 脱衣判定の拡張
+                case 17: 
+                    // 既に脱衣状態（解放・膨張含む）の場合は膨張Lv+1
+                    if (this.player.hasStatus('undressing') || this.player.isLiberated) {
+                        this.log("露出した肌に魔力が過剰供給される！");
+                        this.processExpansion(1);
+                    } else {
+                        // 通常時は強制脱衣
+                        this.processForceStrip();
+                    }
                     break;
-                case 18: // 何も起こらない (ランダムテキスト)
+
+                case 18: // 何も起こらない
                     {
                         let triggeredDeath = false;
                         if (this.equipment.magic_circle && this.equipment.magic_circle.passive.type === 'chaos_death_gamble') {
@@ -4254,10 +4549,41 @@ class BattleSystem {
                     this.player.barrier = (this.player.barrier || 0) + this.player.def;
                     this.log(`咄嗟に身を守った！ 防壁+${this.player.def}`);
                     break;
+
+                // ▼ 追加: HP全回復
+                case 20: 
+                    this.player.hp = this.player.maxHp;
+                    this.log("混沌の恵み！ HPが全回復した！");
+                    break;
+
+                // ▼ 追加: 「ただの石」入手
+                case 21: 
+                    {
+                        const stoneCard = CARD_DATABASE.find(c => c.id === 'stone');
+                        if (stoneCard) {
+                            const newCard = JSON.parse(JSON.stringify(stoneCard));
+                            // モードに応じて入手先を変更
+                            if (this.mode === 'rogue') {
+                                this.cardPool.push(newCard);
+                            } else {
+                                this.tempInventory.push(newCard);
+                            }
+                            this.log("魔法カード「ただの石」を手に入れた！");
+                        }
+                    }
+                    break;
             }
 
             this.updateStatsUI();
+            
+            // ループ終了判定: どちらかが死んだらbreak
             if (this.enemy.isDead() || this.player.isDead()) break;
+        }
+
+        // ▼ 追加: 敵死亡時の即時勝利判定
+        if (this.enemy.isDead()) {
+            await wait(500);
+            this.processWin();
         }
     }
 
@@ -4270,12 +4596,11 @@ class BattleSystem {
         // 1. 膨張状態 (最優先)
         if (this.player.expansionLevel > 0) {
             const lv = this.player.expansionLevel;
+            // ▼ 修正: ファイル名の割り当てを入れ替え
             if (this.player.isLiberated) {
-                // 解放脱衣ベース (指定: Fairy_undressing_growth)
-                src = `Fairy_undressing_growth${lv}.png`;
-            } else {
-                // 通常脱衣ベース (指定: fairy_liberation_growth)
                 src = `fairy_liberation_growth${lv}.png`;
+            } else {
+                src = `Fairy_undressing_growth${lv}.png`;
             }
         }
         // 2. 解放 or 脱衣状態
@@ -4364,6 +4689,246 @@ class BattleSystem {
         return selected.log;
     }
 
+showFairySpring() {
+        const overlay = document.getElementById('spring-overlay');
+        if (overlay) {
+            overlay.style.display = 'flex';
+            
+            // ▼▼▼ 追加: オーバーレイ内のボタンを強制的に有効化する ▼▼▼
+            const buttons = overlay.querySelectorAll('button');
+            buttons.forEach(btn => {
+                // "知恵を授かる"ボタン(id: btn-get-wisdom)は updateSpringUI で制御するので除外
+                if (btn.id !== 'btn-get-wisdom') {
+                    btn.disabled = false;
+                    btn.style.opacity = 1.0;
+                }
+            });
+            // ▲▲▲ 追加ここまで ▲▲▲
+
+            this.updateSpringUI();
+        }
+    }
+// 妖精の泉を閉じる
+    closeSpring() {
+        const overlay = document.getElementById('spring-overlay');
+        
+        // 1. 即座に画面を閉じる
+        if (overlay) {
+            overlay.style.display = 'none';
+        }
+
+        // 2. セーブ処理を非同期（少し遅れて実行）にする
+        // これにより、重い処理が走ってもUIの「閉じる」動作が妨げられない
+        setTimeout(() => {
+            try {
+                this.saveGame(); 
+            } catch (e) {
+                console.error("closeSpring: Save failed", e);
+            }
+        }, 50); // 50ミリ秒後に実行
+    }
+
+updateSpringUI() {
+        // --- 知恵ボタンの更新 ---
+        const btnWisdom = document.getElementById('btn-get-wisdom');
+        const msgWisdom = document.getElementById('spring-wisdom-msg');
+        
+        if (btnWisdom && msgWisdom) {
+            if (this.canReceiveWisdom) {
+                btnWisdom.disabled = false;
+                btnWisdom.style.opacity = 1.0;
+                msgWisdom.textContent = "冒険の成果により、新たな知識が得られそうです。";
+            } else {
+                btnWisdom.disabled = true;
+                btnWisdom.style.opacity = 0.5;
+                msgWisdom.textContent = "深い階層(10F以上)から帰還すると、知識が得られます。";
+            }
+        }
+
+        // --- 変性ステータスの表示 ---
+        const shrinkSpan = document.getElementById('spring-shrink-val');
+        const expansionSpan = document.getElementById('spring-expansion-val');
+
+        // 現在値の再取得 (確実に最新の値を表示するため)
+        const curShrink = (typeof this.player.shrinkLevel === 'number') ? this.player.shrinkLevel : 0;
+        const curExp = (typeof this.player.expansionLevel === 'number') ? this.player.expansionLevel : 0;
+        
+        const minShrink = this.getMinShrinkLevel();
+        const maxShrink = 3;
+        
+        const minExp = this.getMinExpansionLevel();
+        const maxExp = 3; // 手動上限
+
+        // 縮小UI更新
+        if (shrinkSpan) {
+            shrinkSpan.textContent = `Lv${curShrink}`;
+            
+            const btnMinus = document.getElementById('btn-shrink-minus');
+            const btnPlus = document.getElementById('btn-shrink-plus');
+            if (btnMinus) {
+                btnMinus.disabled = (curShrink <= minShrink);
+                btnMinus.style.opacity = (curShrink <= minShrink) ? 0.3 : 1.0;
+            }
+            if (btnPlus) {
+                btnPlus.disabled = (curShrink >= maxShrink);
+                btnPlus.style.opacity = (curShrink >= maxShrink) ? 0.3 : 1.0;
+            }
+        }
+
+        // 膨張UI更新
+        if (expansionSpan) {
+            expansionSpan.textContent = `Lv${curExp}`;
+            
+            const btnMinus = document.getElementById('btn-expansion-minus');
+            const btnPlus = document.getElementById('btn-expansion-plus');
+            if (btnMinus) {
+                btnMinus.disabled = (curExp <= minExp);
+                btnMinus.style.opacity = (curExp <= minExp) ? 0.3 : 1.0;
+            }
+            if (btnPlus) {
+                btnPlus.disabled = (curExp >= maxExp);
+                btnPlus.style.opacity = (curExp >= maxExp) ? 0.3 : 1.0;
+            }
+        }
+    }
+    
+    // 機能1: 知恵を授かる
+    triggerSpringWisdom() {
+        if (!this.canReceiveWisdom) return;
+
+        // ランダムな魔法カード(合成専用などを除く)を1枚取得
+        const candidates = CARD_DATABASE.filter(c => 
+            !c.isSynthesisOnly && c.type !== 'passive' && c.type !== 'none' && c.type !== 'misc'
+        );
+        const card = candidates[Math.floor(Math.random() * candidates.length)];
+
+        // 入手処理 (インベントリへ)
+        const newCard = JSON.parse(JSON.stringify(card));
+        this.permInventory.push(newCard);
+
+        this.log(`妖精の泉から『${newCard.name}』を授かった！`);
+        this.showToast(`魔法カード『${newCard.name}』を獲得！`, "success");
+
+        // フラグ消費
+        this.canReceiveWisdom = false;
+        this.updateSpringUI();
+        this.saveGame();
+    }
+
+// 機能2: 変性の術式 (Lv変更)
+// 妖精の泉でのステータス調整
+adjustSpringStatus(type, delta) {
+        // 現在の値を安全に取得
+        const curShrink = (typeof this.player.shrinkLevel === 'number') ? this.player.shrinkLevel : 0;
+        const curExp = (typeof this.player.expansionLevel === 'number') ? this.player.expansionLevel : 0;
+
+        if (type === 'shrink') {
+            const min = this.getMinShrinkLevel(); 
+            const max = 3; 
+            
+            let next = curShrink + delta;
+            
+            // 範囲制限
+            if (next < min) next = min;
+            if (next > max) next = max;
+            
+            // 値の更新
+            this.player.shrinkLevel = next;
+
+        } else if (type === 'expansion') {
+            const min = this.getMinExpansionLevel();
+            const max = 3; // 手動上限はLv3
+            
+            let next = curExp + delta;
+            
+            // 範囲制限
+            if (next < min) next = min;
+            if (next > max) next = max;
+            
+            // 値の更新
+            this.player.expansionLevel = next;
+        }
+        
+        // 即座に反映
+        this.recalcStats();
+        this.updateSpringUI(); // ボタン・数値の表示更新
+        this.updateStatsUI();  // 立ち絵やパラメータ更新
+        this.saveGame();
+    }
+    
+    /**
+     * 現在の状態に基づいて、ダンジョン用フレーバーイベントの候補リストを取得する
+     * @returns {Array} テキストオブジェクト({text, dialogue})の配列
+     */
+    getDungeonFlavorCandidates() {
+        let pool = [];
+
+        const sLv = this.player.shrinkLevel;   // 縮小Lv
+        const eLv = this.player.expansionLevel; // 膨張Lv
+
+        // ▼ 追加: 縮小(Shrink) × 膨張(Expansion) の複合状態
+        if (sLv > 0 && eLv > 0) {
+            // キー名生成ロジック: flavor_shrink_lv{S}_expansion_lv{E}
+            const key = `flavor_shrink_lv${sLv}_expansion_lv${eLv}`;
+            
+            if (FLAVOR_EVENT_DATA_MIXED[key]) {
+                pool = pool.concat(FLAVOR_EVENT_DATA_MIXED[key]);
+            } else {
+                // 万が一該当キーがない場合は、汎用の縮小or膨張テキストを混ぜる（安全策）
+                pool = pool.concat(FLAVOR_EVENT_DATA.flavor_shrink_general_positive);
+                pool = pool.concat(FLAVOR_EVENT_DATA.flavor_expansion_general_positive);
+            }
+            
+            // 複合状態のときは、これだけでリターンしても良いし、他と混ぜても良い。
+            // ここでは「特殊状態」感を出すため、複合テキストのみを返す（poolがあれば）
+            if (pool.length > 0) return pool;
+        }
+        
+        // ▼ 以下、既存のロジック (優先度: 膨張 > 解放 > 縮小 > 通常)
+
+        // A. 膨張状態 (Expansion)
+        if (eLv > 0) {
+            const lv = eLv;
+            
+            // 汎用膨張セリフ
+            pool = pool.concat(FLAVOR_EVENT_DATA.flavor_expansion_general_positive);
+
+            if (this.player.isLiberated) {
+                // 解放 + 膨張 (陶酔)
+                if (lv === 1 && FLAVOR_EVENT_DATA.flavor_liberation_expansion_lv1_positive) pool = pool.concat(FLAVOR_EVENT_DATA.flavor_liberation_expansion_lv1_positive);
+                if (lv === 2 && FLAVOR_EVENT_DATA.flavor_liberation_expansion_lv2_positive) pool = pool.concat(FLAVOR_EVENT_DATA.flavor_liberation_expansion_lv2_positive);
+                if (lv >= 3 && FLAVOR_EVENT_DATA.flavor_liberation_expansion_lv3_positive)  pool = pool.concat(FLAVOR_EVENT_DATA.flavor_liberation_expansion_lv3_positive);
+            } else if (this.player.hasStatus('undressing')) {
+                // 脱衣 + 膨張 (事故/ポジティブ)
+                if (lv === 1 && FLAVOR_EVENT_DATA.flavor_accident_expansion_lv1_positive) pool = pool.concat(FLAVOR_EVENT_DATA.flavor_accident_expansion_lv1_positive);
+                if (lv === 2 && FLAVOR_EVENT_DATA.flavor_accident_expansion_lv2_positive) pool = pool.concat(FLAVOR_EVENT_DATA.flavor_accident_expansion_lv2_positive);
+                if (lv >= 3 && FLAVOR_EVENT_DATA.flavor_accident_expansion_lv3_positive)  pool = pool.concat(FLAVOR_EVENT_DATA.flavor_accident_expansion_lv3_positive);
+            }
+        }
+        // B. 解放状態 (Liberation) ※膨張していない時
+        else if (this.player.isLiberated) {
+            pool = pool.concat(FLAVOR_EVENT_DATA.flavor_liberation_stripped_positive);
+        }
+        // C. 縮小状態 (Shrink)
+        else if (sLv > 0) {
+            const lv = sLv;
+            
+            // 汎用縮小セリフ
+            pool = pool.concat(FLAVOR_EVENT_DATA.flavor_shrink_general_positive);
+
+            // レベル別
+            if (lv === 1 && FLAVOR_EVENT_DATA.flavor_shrink_lv1_positive) pool = pool.concat(FLAVOR_EVENT_DATA.flavor_shrink_lv1_positive);
+            if (lv === 2 && FLAVOR_EVENT_DATA.flavor_shrink_lv2_positive) pool = pool.concat(FLAVOR_EVENT_DATA.flavor_shrink_lv2_positive);
+            if (lv >= 3 && FLAVOR_EVENT_DATA.flavor_shrink_lv3_positive)  pool = pool.concat(FLAVOR_EVENT_DATA.flavor_shrink_lv3_positive);
+        }
+        // D. 通常状態 (Normal)
+        else {
+            pool = pool.concat(FLAVOR_EVENT_DATA.flavor_normal_expansion_positive);
+        }
+
+        return pool;
+    }
+
     // --- 妖精の独り言システム ---
 
     startMessageTimer() {
@@ -4371,74 +4936,90 @@ class BattleSystem {
         this.messageTimer = setInterval(() => this.updateFairyMessage(), 10000); // 10秒ごと
     }
 
-    stopMessageTimer() {
-        if (this.messageTimer) {
-            clearInterval(this.messageTimer);
-            this.messageTimer = null;
-        }
-    }
-
     updateFairyMessage(isManual = false) {
-        // 【修正】拠点以外では絶対に喋らせない
         if (!this.isHome) return;
 
         let text = "";
+        const sLv = (typeof this.player.shrinkLevel === 'number') ? this.player.shrinkLevel : 0;
+        const eLv = (typeof this.player.expansionLevel === 'number') ? this.player.expansionLevel : 0;
+        const isLiberated = this.player.isLiberated; // 解放の証装備中
 
-        // --- 手動クリックの場合 (Manual) ---
+        // --- 手動クリック (Manual / Touch) ---
         if (isManual) {
             this.clickStreak++;
 
-            // ▼▼▼ 修正: 50%の確率で「タッチ反応」を採用。残りの50%は何もせず下の「雑談」へ流す ▼▼▼
+            // 50%でクリック反応、50%で通常の雑談へ流す
             if (Math.random() < 0.5) {
-                
-                // 1. 現在の状態から、使用するセリフリストを決定
-                let targetData = null;
-                
-                // 優先度: 脱衣 > 縮小 > 通常
-                if (this.player.hasStatus('undressing') || (this.equipment.accessory && this.equipment.accessory.isLiberationProof)) {
-                    targetData = FAIRY_DIALOGUE_DATA.touch_stripped;
-                } else if (this.player.shrinkLevel === 3) {
-                    targetData = FAIRY_DIALOGUE_DATA.touch_shrink_3;
-                } else if (this.player.shrinkLevel === 2) {
-                    targetData = FAIRY_DIALOGUE_DATA.touch_shrink_2;
-                } else if (this.player.shrinkLevel === 1) {
-                    targetData = FAIRY_DIALOGUE_DATA.touch_shrink_1;
-                } else {
-                    targetData = FAIRY_DIALOGUE_DATA.touch_normal;
-                }
-
-                // データがない場合のフォールバック
-                if (!targetData) {
-                    targetData = { lv1: FAIRY_DIALOGUE_DATA.idle };
-                }
-
-                // 2. 連打回数に応じたセリフの選択
                 let targetList = [];
-                if (this.clickStreak <= 3) {
-                    targetList = targetData.lv1 || targetData.lv1;
-                } else if (this.clickStreak <= 8) {
-                    targetList = targetData.lv2 || targetData.lv1;
-                } else {
-                    targetList = targetData.lv3 || targetData.lv1;
+
+                // 優先度 A: 膨張状態 (自己接触)
+                if (eLv > 0) {
+                    const key = `touch_expansion_lv${Math.min(3, eLv)}`;
+                    if (FAIRY_TALK_EXPANSION[key]) {
+                        targetList = FAIRY_TALK_EXPANSION[key];
+                    }
+                }
+                
+                // 優先度 B: 縮小状態
+                if (targetList.length === 0 && sLv > 0) {
+                    if (sLv === 3) targetList = FAIRY_DIALOGUE_DATA.touch_shrink_3 || [];
+                    else if (sLv === 2) targetList = FAIRY_DIALOGUE_DATA.touch_shrink_2 || [];
+                    else targetList = FAIRY_DIALOGUE_DATA.touch_shrink_1 || [];
                 }
 
-                text = this.getRandomDialogue(targetList);
+                // 優先度 C: 解放/脱衣状態 (膨張なし)
+                // ※ isLiberated または 脱衣状態
+                if (targetList.length === 0 && (isLiberated || this.player.hasStatus('undressing'))) {
+                    // 脱衣専用セリフがあればそれを使う (既存データ依存)
+                    if (FAIRY_DIALOGUE_DATA.touch_stripped && FAIRY_DIALOGUE_DATA.touch_stripped.lv1) {
+                        targetList = FAIRY_DIALOGUE_DATA.touch_stripped.lv1; 
+                    }
+                }
+
+                // 優先度 D: 通常
+                if (targetList.length === 0) {
+                    // 既存の touch_normal データ構造に合わせて取得
+                    if (FAIRY_DIALOGUE_DATA.touch_normal) {
+                        if (Array.isArray(FAIRY_DIALOGUE_DATA.touch_normal)) {
+                            targetList = FAIRY_DIALOGUE_DATA.touch_normal;
+                        } else if (FAIRY_DIALOGUE_DATA.touch_normal.lv1) {
+                            targetList = FAIRY_DIALOGUE_DATA.touch_normal.lv1;
+                        }
+                    }
+                }
+
+                // 2. 【追加】膨張Lv4 (限界サイズ) なら、専用セリフを候補に「混ぜる」
+                // 前向きであろうとしつつも、隠しきれない物理的・精神的限界
+                if (this.player.expansionLevel >= 4) {
+                    const lv4ManualDialogues = [
+                        "前が見えません……。でも、この巨大な二つの塊が、私の魔力タンクだと思えば……頼もしい、ですよね？",
+                        "うぅ、重たい……。首が持っていかれそうです。でも、これだけの質量があれば、どんな衝撃も吸収できちゃうかも♪",
+                        "皮膚が限界まで伸びきって、パンパンです。……つんって突っついたら、弾けちゃいそうで……少し怖くて、ドキドキします。",
+                        "顔より大きいなんて……ふふ、バランス崩壊もいいところです。でも、これが「大妖精」の器の大きさってことですよね！",
+                        "よいしょ……っと。持ち上げないと歩けないなんて。……贅沢な悩みだと思って、頑張って支えますっ！"
+                    ];
+                    targetList.push(...lv4ManualDialogues);
+                }
+
+                if (targetList.length > 0) {
+                    text = this.getRandomDialogue(targetList);
+                }
             }
-            // ▲▲▲ 修正ここまで (50%でtextが空のままとなり、下の雑談ロジックが実行される) ▲▲▲
-            
         } else {
-            this.clickStreak = 0; // 自動更新時は連打リセット
+            this.clickStreak = 0; // 自動更新時はリセット
         }
 
-        // 1. Return Event (帰還直後)
+        // --- 独り言ロジック (Idle Talk) ---
+        
+        // 1. 帰還直後のイベント (優先度高)
         if (!text && this.returnState) {
+            // (既存の帰還ロジックを維持)
             if (this.returnState === 'defeat') {
                 text = this.getRandomDialogue(FAIRY_DIALOGUE_DATA.return_defeat);
             } else if (this.returnState === 'victory') {                
-                // 特殊リザルトがある場合は優先
                 if (this.specialResultKey && FAIRY_DIALOGUE_DATA[this.specialResultKey]) {
                     text = this.getRandomDialogue(FAIRY_DIALOGUE_DATA[this.specialResultKey]);
-                    this.specialResultKey = null; // 一度だけ表示
+                    this.specialResultKey = null; 
                 } else 
                 if (this.lastLootCount === 0) {
                     text = this.getRandomDialogue(FAIRY_DIALOGUE_DATA.return_empty);
@@ -4446,76 +5027,139 @@ class BattleSystem {
                     text = this.getRandomDialogue(FAIRY_DIALOGUE_DATA.return_victory);
                 }
             }
-            this.returnState = null; // フラグ消費
+            this.returnState = null;
         }
-        // 2. AFK (放置状態)
+        
+        // 2. 放置ボイス (AFK)
         else if (!text && Date.now() - this.lastActionTime > 120000) {
-             text = this.getRandomDialogue(FAIRY_DIALOGUE_DATA.afk);
+            // ▼▼▼ 修正: 放置時のセリフを膨張状態で分岐 ▼▼▼
+            let afkPool = [];
+            const currentExpansionLevel = this.player.expansionLevel || 0;
+
+            // A. 膨張Lv4 (限界突破・肉の海に溺れる)
+            if (currentExpansionLevel >= 4) {
+                afkPool = [
+                    "はぁ……っ。自分の胸なのに、抱きしめると……大きすぎて、腕が回りません。……ムニュッて潰すと、脳みそが溶けそうな快感が……。",
+                    "（胸に顔を埋めて）……んーっ、ぷはぁ。甘い匂い……。自分の肉の海に溺れちゃう……。もう、息するのも忘れて……ずっとこうしてたい……。",
+                    "あぁ、ダメ……。皮が薄すぎて、血管が透けて見えるくらい……。指でなぞるだけで、中身がビクビク震えて……イキっぱなしになっちゃう……。",
+                    "重い、熱い、苦しい……でも、気持ちいい……。見て、先端から魔力がポタポタ垂れてる……。搾ってほしいのかな？ ねえ……。",
+                    "ひぐぅ……っ！ ちょっと動いただけで、ボヨンってすごい衝撃が……！ 乳房が揺れるたびに、子宮までズンって響いて……あはぁっ♡",
+                    "もう、私の顔なんて見えなくていいです……。視界全部が、ピンク色のお肉……。世界で一番幸せな、閉鎖空間……ふふっ……。"
+                ];
+            }
+            // B. 膨張Lv3 (快楽堕ち・トランス)
+            else if (currentExpansionLevel === 3) {
+                afkPool = [
+                    "あぁっ、んあぁっ……！ ダメ、止まらない……！ お肉が揺れるたびに、頭の芯まで痺れて……ッ、イっちゃう、またイっちゃう……！",
+                    "（床に体を押し付けながら）……はぁ、はぁ……。見て、私の体……こんなに浅ましく脈打って……。もう妖精じゃなくて、ただの「快感を感じる肉袋」です……。",
+                    "ひグッ、あぁ……！ 魔力が、中から突き上げて……内臓ごと犯されてるみたい……。ねえ、もう壊して……めちゃくちゃにしてください……ッ！",
+                    "……んぅ。……今の、聞きました？ 私、自分の重みだけで……こんなに濡れて……。ふふ、恥ずかしいのに、体が喜んで止まりません……。",
+                    "あへぇ……。もう、指一本動かせない……。体中がジンジンして……頭がトロトロで……。このまま一生、こうして喘いでいたい……。"
+                ];
+            }
+            // C. 膨張Lv1-2 (敏感・自慰)
+            else if (currentExpansionLevel > 0) {
+                afkPool = [
+                    "くぅっ……！ 皮膚が薄くなってて、空気が触れるだけで乳首が……っ！ ごめんなさい、我慢できなくて……自分で、触っちゃいます……。",
+                    "はぁ……はぁ……。ダメです、見ないで……。お腹の奥が熱くて、疼いて……こうして自分で宥（なだ）めてないと、おかしくなりそうで……。",
+                    "……んっ、ぁ。ふふ、すごいです。指がズブズブ沈んでいく……。私、全身が性感帯になっちゃったみたい……気持ちいい……。",
+                    "（体を抱きしめて身悶えしながら）……んくっ。膨らんだところが擦れ合って……熱い、熱いよぉ……。ねえ、この熱、どうすれば静まりますか……？",
+                    "あぁ……魔力がパンパンに詰まってて……。ちょっと撫ただけで、中から「出して」って暴れるんです……。んぅ……っ、出ちゃいそう……。"
+                ];
+            }
+            // D. 通常時 (既存のAFKデータ)
+            else {
+                afkPool = FAIRY_DIALOGUE_DATA.afk || ["……（退屈そうにしている）"];
+            }
+            text = this.getRandomDialogue(afkPool);
         }
-        // [New] 拠点での脱衣状態 (Stripped at Home)
-        // 戦闘コマンドが表示されていない(=拠点) かつ 脱衣状態
-        else if (!text && this.ui.battleCommands.style.display === 'none' && this.player.hasStatus('undressing')) {
-            text = this.getRandomDialogue(FAIRY_DIALOGUE_DATA.idle_stripped_home);
-        }
-        // 3. Normal Loop (日常)
+
+        // 3. 通常の抽選ループ
         else if (!text) {
-            let pool = [...FAIRY_DIALOGUE_DATA.idle];
+            let pool = [...FAIRY_DIALOGUE_DATA.idle]; // 基本会話
+
+            // --- A. 複合状態 (縮小 x 膨張) ---
+            if (sLv > 0 && eLv > 0) {
+                const mixKey = `mixed_s${sLv}_e${eLv}`;
+                if (FAIRY_TALK_EXPANSION[mixKey]) {
+                    // 複合状態なら、かなりの高確率でこれを喋らせるためにpoolをこれだけで上書きしてもいいが、
+                    // ここではpoolに追加して比率を高める
+                    pool = pool.concat(FAIRY_TALK_EXPANSION[mixKey]);
+                    pool = pool.concat(FAIRY_TALK_EXPANSION[mixKey]); // 比率アップ
+                }
+            }
+
+            // --- B. 膨張状態 (単体) ---
+            if (eLv > 0) {
+                // 解放の証装備中 -> Liberation (Positive)
+                if (isLiberated) {
+                    const libKey = `liberation_lv${Math.min(3, eLv)}`;
+                    if (FAIRY_TALK_EXPANSION[libKey]) {
+                        pool = pool.concat(FAIRY_TALK_EXPANSION[libKey]);
+                    }
+                } 
+                // 未装備 -> Accident (Negative/Shy)
+                else {
+                    const accKey = `accident_lv${Math.min(3, eLv)}`;
+                    if (FAIRY_TALK_EXPANSION[accKey]) {
+                        pool = pool.concat(FAIRY_TALK_EXPANSION[accKey]);
+                    }
+                }
+                
+                // 治療拒否セリフも混ぜる
+                if (FAIRY_TALK_EXPANSION.refuse_cure) {
+                    pool = pool.concat(FAIRY_TALK_EXPANSION.refuse_cure);
+                }
+            }
+
+            // --- C. 縮小状態 (単体) ---
+            if (sLv > 0 && eLv === 0) { // 複合でない場合のみ
+                pool = pool.concat(FAIRY_DIALOGUE_DATA.shrink_idle_universal || []);
+                if (sLv === 1) pool = pool.concat(FAIRY_DIALOGUE_DATA.shrink_idle_lv1 || []);
+                if (sLv === 2) pool = pool.concat(FAIRY_DIALOGUE_DATA.shrink_idle_lv2 || []);
+                if (sLv === 3) pool = pool.concat(FAIRY_DIALOGUE_DATA.shrink_idle_lv3 || []);
+            }
+
+            // --- D. 装備・ステータス反応 (既存) ---
             
-            // 状態異常についての雑談 (Status Ailment Talks)
+            // 状態異常反応
             pool = pool.concat(FAIRY_DIALOGUE_DATA.talk_poison || []);
-            pool = pool.concat(FAIRY_DIALOGUE_DATA.talk_confusion || []);
-            pool = pool.concat(FAIRY_DIALOGUE_DATA.talk_distraction || []);
-            pool = pool.concat(FAIRY_DIALOGUE_DATA.talk_fear || []);
-            pool = pool.concat(FAIRY_DIALOGUE_DATA.talk_petrified || []);
-            pool = pool.concat(FAIRY_DIALOGUE_DATA.talk_stripped || []);
-            pool = pool.concat(FAIRY_DIALOGUE_DATA.talk_shrink_general || []);
-            pool = pool.concat(FAIRY_DIALOGUE_DATA.talk_expansion || []);
+            // ... (その他の状態異常) ...
 
-            // High ATK (脳筋)
-            if (this.player.atk >= this.player.int * 2.5) {
-                pool = pool.concat(FAIRY_DIALOGUE_DATA.high_atk || []);
+            // 解放の証 (Liberated) 単体のセリフ (膨張していない時)
+            if (isLiberated && eLv === 0) {
+                // 既存の脱衣セリフなどを流用、または解放専用セリフがあれば追加
+                pool = pool.concat(FAIRY_DIALOGUE_DATA.talk_stripped || []); 
             }
-            // High INT (魔力特化)
-            if (this.player.int >= this.player.atk * 2.5) {
-                pool = pool.concat(FAIRY_DIALOGUE_DATA.high_int || []);
+            // 通常脱衣 (Accident Strip)
+            else if (!isLiberated && this.player.hasStatus('undressing') && eLv === 0) {
+                pool = pool.concat(FAIRY_DIALOGUE_DATA.idle_stripped_home || []);
+                pool = pool.concat(FAIRY_DIALOGUE_DATA.talk_stripped || []);
             }
 
-            // Weapon Type (装備種別)
+            // High Status / Weapon Type (既存ロジック維持)
+            if (this.player.atk >= this.player.int * 2.5) pool = pool.concat(FAIRY_DIALOGUE_DATA.high_atk || []);
+            if (this.player.int >= this.player.atk * 2.5) pool = pool.concat(FAIRY_DIALOGUE_DATA.high_int || []);
+            
             if (this.equipment.weapon) {
                 const wName = this.equipment.weapon.name;
-                if (wName.includes("剣") || wName.includes("斧") || wName.includes("刀")) {
-                    pool = pool.concat(FAIRY_DIALOGUE_DATA.equip_sword || []);
-                }
-                if (wName.includes("杖") || wName.includes("書")) {
-                    pool = pool.concat(FAIRY_DIALOGUE_DATA.equip_wand || []);
-                }
-                if (wName.includes("大盾")) {
-                    pool = pool.concat(FAIRY_DIALOGUE_DATA.equip_shield || []);
-                }
+                if (wName.includes("剣") || wName.includes("斧")) pool = pool.concat(FAIRY_DIALOGUE_DATA.equip_sword || []);
+                if (wName.includes("杖") || wName.includes("書")) pool = pool.concat(FAIRY_DIALOGUE_DATA.equip_wand || []);
             }
-            
-            // Shrink (縮小)
-            if (this.player.shrinkLevel > 0) {
-                pool = pool.concat(FAIRY_DIALOGUE_DATA.shrink_idle_universal || []);
-                if (this.player.shrinkLevel === 1) pool = pool.concat(FAIRY_DIALOGUE_DATA.shrink_idle_lv1 || []);
-                if (this.player.shrinkLevel === 2) pool = pool.concat(FAIRY_DIALOGUE_DATA.shrink_idle_lv2 || []);
-                if (this.player.shrinkLevel === 3) pool = pool.concat(FAIRY_DIALOGUE_DATA.shrink_idle_lv3 || []);
-            }
-            
-            // Equip Hints (装備ヒント)
-            if (this.equipment.accessory) {
-                const hints = FAIRY_DIALOGUE_DATA.equip_hints[this.equipment.accessory.id];
-                if (hints) {
-                    pool = pool.concat(hints);
-                }
-            }
-            
+
             text = this.getRandomDialogue(pool);
         }
 
-        // 抽選と表示
+        // 表示
         if (text) {
             this.showFairyMessage(text);
+        }
+    }
+
+    stopMessageTimer() {
+        if (this.messageTimer) {
+            clearInterval(this.messageTimer);
+            this.messageTimer = null;
         }
     }
 

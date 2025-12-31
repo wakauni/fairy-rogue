@@ -100,3 +100,4 @@ function getItemById(itemId) {
     }
     return null;
 }
+// main.js の末尾に追加

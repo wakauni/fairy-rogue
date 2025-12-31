@@ -67,13 +67,12 @@
                 DEF:<span id="stat-def">5</span>
                 INT:<span id="stat-int">15</span>
                 SPD:<span id="stat-spd">12</span>
-                <div id="status-icon" style="display:none;"></div>
             </div>
         </div>
-        <div class="status-box" style="text-align: right;">
+        <div class="status-box" style="text-align: right; display:flex; flex-direction:column; align-items:flex-end;">
             <div id="floor-display" style="font-size:14px; font-weight:bold; color:#f1c40f; margin-bottom:4px;">Home</div>
-            <span>Deck: <span id="deck-count">0</span></span>
-            <span>Discard: <span id="discard-count">0</span></span>
+            
+            <div id="status-icon" style="display:inline-flex; gap:4px; flex-wrap:wrap; justify-content:flex-end; min-height:20px;"></div>
         </div>
     </div>
 
@@ -107,11 +106,14 @@
             </div>
         </div>
 
+
         <div id="enemy-intent">
             <span id="intent-icon">⚔️</span>
             <span id="intent-text">攻撃の予感...</span>
         </div>
         <div id="enemy-graphic">BOSS</div>
+
+        <div id="battle-loot-area" style="display: none;"></div>
         <div id="battle-log">
             <div class="log-entry">ダンジョン深部に到達した！</div>
             <div class="log-entry">強敵が現れた！</div>
@@ -140,6 +142,58 @@
             <div id="system-commands" style="display: none;"></div>
         </div>
     </div>
+
+            <div id="spring-overlay" class="overlay" style="display: none;">
+            <div class="overlay-content spring-content">
+                <h2 style="color: #4a90e2; text-shadow: 0 0 5px #fff;">妖精の泉</h2>
+                <div class="spring-desc">
+                    清らかな魔力が満ちている。<br>
+                    冒険の疲れを癒やし、肉体の形質を変化させることができるようだ。
+                </div>
+    
+                <div class="spring-section">
+                    <h3>古き妖精の知恵</h3>
+                    <div id="spring-wisdom-msg" style="font-size:12px; color:#aaa; margin-bottom:5px;">
+                        </div>
+                    <button id="btn-get-wisdom" class="btn" onclick="game.triggerSpringWisdom()" disabled>
+                        ✨ 知恵を授かる (カード獲得)
+                    </button>
+                </div>
+    
+                <hr style="border:0; border-top:1px solid #444; margin: 15px 0;">
+    
+                <div class="spring-section">
+                    <h3>変性の術式</h3>
+                    <div style="font-size:12px; color:#ccc; margin-bottom:10px;">
+                        肉体のサイズと魔力受容体を調整します。<br>
+                        (※膨張させる場合、衣服は脱衣状態となります)
+                    </div>
+    
+                    <div class="status-adjust-row">
+                    <span>縮小化: </span>
+                    <button id="btn-shrink-minus" class="btn-mini" onclick="game.adjustSpringStatus('shrink', -1)">-</button>
+                    
+                    <span id="spring-shrink-val" style="display:inline-block; width:40px; text-align:center; font-weight:bold;">Lv0</span>
+                    
+                    <button id="btn-shrink-plus" class="btn-mini" onclick="game.adjustSpringStatus('shrink', 1)">+</button>
+                </div>
+
+                <div class="status-adjust-row">
+                    <span>膨　張: </span>
+                    <button id="btn-expansion-minus" class="btn-mini" onclick="game.adjustSpringStatus('expansion', -1)">-</button>
+                    
+                    <span id="spring-expansion-val" style="display:inline-block; width:40px; text-align:center; font-weight:bold;">Lv0</span>
+                    
+                    <button id="btn-expansion-plus" class="btn-mini" onclick="game.adjustSpringStatus('expansion', 1)">+</button>
+                </div>
+                </div>
+    
+                <div style="margin-top: 20px;">
+                    <button class="btn close-btn" onclick="game.closeSpring()">戻る</button>
+                </div>
+            </div>
+        </div>
+
 </div>
 
 <!-- スクリプトの読み込み順序が重要です -->

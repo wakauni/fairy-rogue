@@ -26,7 +26,7 @@ class Unit {
         this.shrinkLevel = 0;      // 縮小レベル (0-2)
         this.routineId = null;     // 敵の思考ルーチンID
         this.uniqueStatus = null;  // 敵が使用する固有状態異常
-        
+        this.curse = 0; // 敵に蓄積された呪い値
         this.counterStance = null; // カウンター待機状態
         this.minShrinkLevel = 0;   // 縮小化の下限
         this.dungeonBonus = { atk: 0, int: 0, dmgRate: 1.0 }; // ダンジョン内ボーナス
@@ -73,7 +73,10 @@ class Unit {
         this.hp = Math.max(0, this.hp - reducedDmg);
         return reducedDmg;
     }
-
+addCurse(amount) {
+    if (this.isPlayer) return; // プレイヤーには付与されない想定
+    this.curse += Math.floor(amount);
+}
     heal(amount) {
         this.hp = Math.min(this.maxHp, this.hp + amount);
     }
