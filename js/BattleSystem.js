@@ -521,6 +521,9 @@ showHome() {
         this.depth = 0; // リセット
 
         document.getElementById('player-area').classList.add('interactive');
+        
+        // 立ち絵とセリフプールを更新（自動セリフ機能のために必要）
+        this.updateCharacterSprite();
 
         // タイマーリセット
         this.stopMessageTimer();
@@ -579,7 +582,7 @@ showHome() {
         this.ui.systemCommands.innerHTML = '';
 
         const actions = [
-            { text: "探索開始", onClick: () => this.startDungeon() }
+            { text: "探索開始", id: "btn-start-dungeon", onClick: () => this.startDungeon() }
         ];
 
         actions.push({ text: "試練の洞窟へ", onClick: () => this.confirmStartRogueMode() });
@@ -828,7 +831,7 @@ showHome() {
         this.cardPool = [];
 
         this.log(`デッキ『${deckDef.name}』で挑戦開始！`);
-        this.startDungeon();
+        this.startDungeon(true);
         this.showToast("【試練開始】装備とデッキは一時的に預かりました。", "warning");
     }
 
@@ -932,8 +935,11 @@ showHome() {
         // 2. 各スロットの最強アイテムを探して装備
         const types = ['weapon', 'armor', 'accessory', 'magic_circle'];
         types.forEach(type => {
+            // 装備不可なアイテム（解放の証など）は最強装備の候補から除外
+            const equippableInventory = this.permInventory.filter(i => !(i.isLiberationProof || (i.passive && i.passive.isLiberationProof)));
+
             // そのタイプのアイテムを抽出
-            const items = this.permInventory.filter(i => i.type === type);
+            const items = equippableInventory.filter(i => i.type === type);
             if (items.length === 0) return;
 
             // 評価値（ATK + DEF）でソート (魔法陣は簡易スコア)
@@ -952,7 +958,7 @@ showHome() {
             
             // 最強を装備
             const bestItem = items[0];
-            this.equipItem(type, this.permInventory.indexOf(bestItem));
+            this.equipItem(type, equippableInventory.indexOf(bestItem));
         });
 
         this.showToast("最強装備に変更しました！", 'success');
@@ -1079,6 +1085,9 @@ showHome() {
 // ステータス再計算
     recalcStats() {
         if (!this.player) return;
+
+        // 特殊状態: 興奮状態でダンジョンに突入した場合、膨張Lv4で固定
+        if (this.player.flags.isExcitedEntry) this.player.expansionLevel = 4;
 
         // --- 1. 下限の強制適用 ---
         let minShrink = this.getMinShrinkLevel();
@@ -1787,28 +1796,57 @@ showHome() {
         }
     }
 
-    // ダンジョン開始（Depth 1）
-    startDungeon() {
-        this.isHome = false;
-                
-        // ▼▼▼ 追加: 基礎ステータスをリセットして開始 ▼▼▼
-        this.resetPlayerBaseStats();
-        document.getElementById('player-area').classList.remove('interactive');
+    // ダンジョン開始
+    startDungeon(isRogue = false) {
+        if (!this.player) return;
 
-        this.stopMessageTimer(); // 独り言停止
-        // デッキ初期化（現在の構成を使用）
-        // 吹き出しを非表示
+        // 特殊状態（興奮して突入）の判定
+        let isExcitedEntry = false;
+        if (!isRogue && this.clickStreak >= 150) {
+            isExcitedEntry = true;
+            this.player.flags.isExcitedEntry = true; // フラグを立てる
+            
+            // リセットタイマーなどをクリア
+            if (this.clickStreakTimer) clearTimeout(this.clickStreakTimer);
+            this.clickStreakTimer = null;
+            this.isClickLocked = false; // ロック解除
+            this.clickStreak = 0; // カウンターリセット
+
+            // 興奮状態での突入セリフ
+            const excitedDialogues = [
+                "あひぃっ♡ 足が……勝手に……っ！ ダメ、こんな破裂しそうな体で……魔物の巣穴になんて……っ、行きたい、行きたぁい♡",
+                "んくぅ……っ♡ 戻れない、戻りたくない……。このふしだらな体……ダンジョン中の魔物に見せびらかしてきますぅ……♡",
+                "はぁ、はぁ……頭がトロトロするぅ……。私、もう戦えません……。ただの「肉の的」になりに……吸い寄せられちゃいますぅ……♡",
+                "あぁっ、んあぁ……！ 中が熱すぎて、じっとしてられない……！ 早く、早く……この体をめちゃくちゃにしてぇ……ッ！"
+            ];
+            const text = this.getRandomDialogue(excitedDialogues);
+            this.showFairyMessage(text);
+        }
+        else {
+            // 通常入場時はステータスをリセット
+            this.resetPlayerBaseStats();
+            
+            // ローグライクモード初期化
+            if (isRogue) {
+                // ... (既存のローグライク初期化処理は startRogueMode で行われる) ...
+            }
+        }
+
+        // --- 共通開始処理 ---
+        this.mode = isRogue ? 'rogue' : 'normal';
+        this.depth = 0;
+        this.turn = 1;
+        this.isHome = false;
+
+        document.getElementById('player-area').classList.remove('interactive');
+        this.stopMessageTimer();
         const bubble = document.getElementById('speech-bubble');
         if (bubble) bubble.style.display = 'none';
 
-        this.restCount = 3; // 休憩回数リセット
+        this.restCount = 3;
         this.deck.initializeDeck(this.masterDeck);
-
-        this.depth = 0;
-        // ▼ 追加: 防壁リセット
         this.player.barrier = 0;
 
-        // [Stats] 統計リセット
         this.player.runStats = {
             magicUse: 0,
             attackUse: 0,
@@ -1817,13 +1855,33 @@ showHome() {
             maxFloor: 0,
             everEquipped: false
         };
-        this.tempInventory = []; // 仮インベントリリセット
+        this.tempInventory = [];
+
+        // 画面切り替え
+        this.ui.systemCommands.style.display = 'none';
+        this.ui.battleCommands.style.display = 'flex';
+        this.menuUi.overlay.style.display = 'none';
+        
+        // ログ
+        this.log("ダンジョン探索を開始した！");
+        if (isExcitedEntry) {
+             this.log("妖精は紅潮したまま、ふらりと迷宮へ飛び込んだ……！");
+        }
+
+        // BGM開始などの処理があればここ
+
+        // 最初のフロアへ
         this.goNextFloor();
     }
 
     // 次の階層へ
 // 次のフロアへ進む（探索処理）
     async goNextFloor() {
+                // ▼▼▼ 修正: ダブルクリックによる競合を防ぐため、ボタンを即座に無効化する ▼▼▼
+        const systemButtons = this.ui.systemCommands.querySelectorAll('.btn');
+        systemButtons.forEach(btn => btn.disabled = true);
+        // ▲▲▲ 修正ここまで ▲▲▲
+
         // 安全策: 戦利品画面を閉じる
         const lootArea = document.getElementById('battle-loot-area');
         if (lootArea) lootArea.style.display = 'none';
@@ -1838,30 +1896,44 @@ showHome() {
             return;
         }
 
-        // --- ランダム判定の重み付け ---
+        // --- イベント抽選ロジック改修 ---
+        const BATTLE_CHANCE = 0.60; // 敵遭遇率: 60%
         const eventRoll = Math.random();
 
-        // 1. 特殊状態イベント (15%)：脱衣 or 膨張Lv3以上
-        if (eventRoll < 0.15) {
-            if ((this.player.hasStatus('undressing') || this.player.isLiberated) && Math.random() < 0.5) {
-                await this.eventMagicMist(); // 魔力霧
-                return;
-            }
-            if (this.player.expansionLevel >= 3 && Math.random() < 0.5) {
-                await this.eventFleshWall(); // 肉壁
-                return;
-            }
-        }
-        
-        // 2. 汎用フレーバーイベント (25%)：何も起きない代わりにセリフが発生
-        // ※以前の「何もなさそうだ……」というログだけの処理を、セリフ付きイベントに差し替え
-        if (eventRoll < 0.40) { // 0.15 ～ 0.40 の範囲
-            this.processFlavorOnlyEvent(); 
+        // 1. 敵と遭遇するかどうかを最初に決定
+        if (eventRoll < BATTLE_CHANCE) {
+            this.encounterEnemy();
             return;
         }
 
-        // 3. 残りの確率 (60%) で敵と遭遇
-        this.encounterEnemy();
+        // 2. 敵と遭遇しない場合 (残り40%の確率)
+        // この中でさらにイベントを抽選する
+        const nonBattleRoll = Math.random();
+        const SPECIAL_EVENT_CHANCE = 0.375; // 元の15%枠 (15 / 40)
+
+        // a. 特殊イベント or 何も起きない (37.5%)
+        if (nonBattleRoll < SPECIAL_EVENT_CHANCE) {
+            // 魔力霧イベント (脱衣/解放時)
+            if ((this.player.hasStatus('undressing') || this.player.isLiberated) && Math.random() < 0.5) {
+                await this.eventMagicMist();
+                return;
+            }
+            // 肉壁イベント (膨張Lv3以上)
+            if (this.player.expansionLevel >= 3 && Math.random() < 0.5) {
+                await this.eventFleshWall();
+                return;
+            }
+            
+            // 上記の特殊イベントに該当しなかった場合、「何も起きない」
+            this.log("静かな通路が続いている……。");
+            this.renderDungeonButtons();
+            return;
+        }
+        // b. 汎用フレーバーイベント (62.5%)
+        else {
+            this.processFlavorOnlyEvent();
+            return;
+        }
     }
 
     // 新規追加: フレーバーのみのイベント（何も起きないが妖精が喋る）
@@ -2290,7 +2362,7 @@ showHome() {
         // [Event] 伝説級装備イベント判定
         if (this.checkEndgameEvents()) {
             return;
-        } 
+        }
 
         // [Result] 特殊セリフの判定
         this.specialResultKey = this.checkResultDialogue(this.player, this.tempInventory);
@@ -2299,6 +2371,7 @@ showHome() {
         this.showHome();
         this.player.minShrinkLevel = 0;
         this.player.dungeonBonus = { atk: 0, int: 0, dmgRate: 1.0 };
+        this.player.flags.isExcitedEntry = false; // 帰還時に興奮状態を解除
     }
 
     // 露出覚醒イベント判定・実行
@@ -2863,6 +2936,9 @@ showHome() {
     async playerAction(actionType) {
         if (!this.isPlayerTurn) return;
 
+        // 敵が存在しない場合は処理しない（エラー回避）
+        if (!this.enemy) return;
+
         // 行動スキップ判定
         if (this.player.skipTurn) {
             this.log("動けない！");
@@ -3112,7 +3188,6 @@ showHome() {
                 if (Math.random() < runChance) {
                     // [Stats] 逃走回数
                     this.player.runStats.escapeCount++;
-                    this.log("逃走成功！");
                     this.cleanupBattle(); // デッキ等のリセット
                     this.processEscape()
                     return;
@@ -3702,28 +3777,38 @@ if (this.enemy && this.enemy.curse > 0) {
                     }
                 }
             
-                // 画面揺れ演出
-                document.body.classList.add('shake');
-                setTimeout(() => document.body.classList.remove('shake'), 500);
 
-                this.log(`${action.label}！ ${dmg} のダメージを受けた！`);
-                this.updateStatsUI();
+            // --- ▼▼▼ 修正箇所: 画面揺れと装備効果 ▼▼▼ ---
+
+            // 1. 画面揺れ (対象を player-img に戻し、専用クラスを適用)
+            const pImg = this.ui.playerImg; // ここを修正
+            if (pImg) {
+                pImg.classList.remove('shake-char');
+                void pImg.offsetWidth; // リフロー
+                pImg.classList.add('shake-char'); // クラス名を修正
+                setTimeout(() => pImg.classList.remove('shake-char'), 500);
             }
 
-            // ▼ 追加: マゾヒストガーター効果
+            this.log(`${action.label}！ ${dmg} のダメージを受けた！`);
+            this.updateStatsUI();
+
+            // 2. マゾヒストガーター効果 (このブロック内に移動！)
             const acc = this.equipment.accessory;
-            if (acc && acc.id === 'acc_click_dmg' && dmg > 0) { // ダメージを受けた場合
-                 if (this.player.hasStatus('undressing') || this.player.isLiberated || this.player.expansionLevel > 0) {
+            if (acc && acc.id === 'acc_click_dmg' && dmg > 0) {
+                // 脱衣/解放/膨張のいずれかなら膨張
+                if (this.player.hasStatus('undressing') || this.player.isLiberated || this.player.expansionLevel > 0) {
                     if (this.player.expansionLevel < 4) {
                         this.player.expansionLevel++;
                         this.log("痛みを快感に変換し、さらに膨張した！");
                     }
                 } else {
+                    // 通常時なら脱衣
                     this.processForceStrip();
                     this.log("衝撃で服が破け散った！");
                 }
                 this.updateCharacterSprite();
                 this.recalcStats();
+            }
             }
         } else if (action.type === 'defend') {
             this.enemy.isDefending = true;
@@ -3870,17 +3955,6 @@ if (this.enemy && this.enemy.curse > 0) {
 
     // 逃走処理
     async processEscape(isSmokeBomb = false) {
-        // 成功判定 (煙玉なら必ず成功)
-        // ※既存の判定ロジックがあれば維持してください。ここでは簡易実装です。
-        const success = isSmokeBomb || (Math.random() < 0.8); // 仮: 80%
-
-        if (!success) {
-            this.log("逃げられなかった！");
-            await wait(500);
-            this.processEnemyTurn();
-            return;
-        }
-
         // 成功時
         this.log(isSmokeBomb ? "煙玉を使って逃げ出した！" : "逃走に成功した！");
         
@@ -4253,6 +4327,19 @@ applyCurseToEnemy(amount) {
 
     // ダンジョン進行用ボタンの描画
     renderDungeonButtons() {
+        // ▼▼▼ 修正: 表示状態の切り替えを確実に行う ▼▼▼
+        
+        // 1. 戦闘コマンドを隠す
+        if (this.ui.battleCommands) {
+            this.ui.battleCommands.style.display = 'none';
+        }
+        
+        // 2. システムコマンド（探索ボタン等）を表示する
+        if (this.ui.systemCommands) {
+            this.ui.systemCommands.style.display = 'flex';
+        }
+        
+        // ▲▲▲ 修正ここまで ▲▲▲
         // ボタン生成（右下エリア用）
         const buttons = [
             { text: "さらに奥へ進む", onClick: () => this.goNextFloor() },
@@ -4328,6 +4415,11 @@ applyCurseToEnemy(amount) {
             btn.disabled = !enabled;
             btn.style.opacity = enabled ? 1 : 0.5;
         });
+
+        // 「試練の洞窟へ」ボタンは常に有効化
+        const rogueBtn = Array.from(this.ui.btns).find(b => b.textContent.includes('試練の洞窟へ'));
+        if (rogueBtn) rogueBtn.disabled = false;
+
     }
 
     // メニューボタン生成ヘルパー
@@ -4349,6 +4441,9 @@ applyCurseToEnemy(amount) {
             btn.className = 'btn';
             btn.textContent = action.text;
             btn.onclick = action.onClick;
+            if (action.id) {
+                btn.id = action.id;
+            }
             if (action.disabled) {
                 btn.disabled = true;
                 btn.style.opacity = 0.5;
@@ -4689,36 +4784,89 @@ applyCurseToEnemy(amount) {
         }
     }
 
+// プレイヤーの立ち絵とセリフプールを更新
     updateCharacterSprite() {
-        const imgEl = this.ui.playerImg;
+        const imgEl = document.getElementById('player-img');
         if (!imgEl) return;
 
-        let src = FACE_IMAGES.NORMAL; // デフォルト
+        let src = FACE_IMAGES.NORMAL;
+        let dialoguePool = null; // 適用するセリフ集
 
-        // 1. 膨張状態 (最優先)
+        // --- 状態判定と画像・セリフの決定 ---
+
+        // 1. 膨張状態 (Expansion)
         if (this.player.expansionLevel > 0) {
             const lv = this.player.expansionLevel;
-            // ▼ 修正: ファイル名の割り当てを入れ替え
+            const shrinkLv = this.player.shrinkLevel || 0;
+
+            // 画像の決定
             if (this.player.isLiberated) {
                 src = `fairy_liberation_growth${lv}.png`;
             } else {
                 src = `Fairy_undressing_growth${lv}.png`;
             }
-        }
-        // 2. 解放 or 脱衣状態
-        else if (this.player.isLiberated || this.player.hasStatus('undressing')) {
-             // 既存の脱衣差分があればここで分岐
-             src = this.player.isLiberated ? "Fairy_liberated.png" : "Fairy_stripped.png"; 
-             // ※既存ファイル名に合わせて調整してください
-        }
-        // 3. 通常 (updatePlayerExpressionでHPに応じた表情がセットされるため、ここではベース画像があればセット)
-        // ただし、updatePlayerExpressionが毎フレーム呼ばれるわけではない場合、ここでセットが必要
-        // ここでは updatePlayerExpression に任せるか、強制的に上書きするか。
-        // 膨張時は専用画像を使うため、ここでセットして updatePlayerExpression 側で上書きされないように制御が必要かも知れない
-        
-        if (this.player.expansionLevel > 0) imgEl.src = src;
-    }
 
+            // セリフの決定 (FAIRY_TALK_EXPANSION を使用)
+            if (typeof FAIRY_TALK_EXPANSION !== 'undefined') {
+                if (shrinkLv > 0) {
+                    // 複合状態 (例: mixed_s1_e1)
+                    dialoguePool = FAIRY_TALK_EXPANSION[`mixed_s${shrinkLv}_e${lv}`];
+                } else if (this.player.isLiberated) {
+                    // 解放膨張 (例: liberation_lv1)
+                    dialoguePool = FAIRY_TALK_EXPANSION[`liberation_lv${lv}`];
+                } else {
+                    // 通常膨張/事故 (例: accident_lv1)
+                    dialoguePool = FAIRY_TALK_EXPANSION[`accident_lv${lv}`];
+                }
+            }
+        }
+        // 2. 縮小状態 (Shrink only)
+        else if (this.player.shrinkLevel > 0) {
+            // 画像は縮小用があれば設定 (なければ通常画像をCSSで縮小表示しているはず)
+            // src = ... 
+            
+            // セリフ (FAIRY_DIALOGUE_DATA を使用)
+            // 縮小レベルに応じたキー (shrink_idle_lv1 など)
+            if (typeof FAIRY_DIALOGUE_DATA !== 'undefined') {
+                dialoguePool = FAIRY_DIALOGUE_DATA[`shrink_idle_lv${this.player.shrinkLevel}`];
+            }
+        }
+        // 3. 解放 or 脱衣状態 (Stripped)
+        else if (this.player.isLiberated || this.player.hasStatus('undressing')) {
+             if (this.player.isLiberated) {
+                 src = "Fairy_liberated.png";
+             } else {
+                 src = "Fairy_stripped.png";
+             }
+             
+             // セリフ (idle_stripped_home)
+             if (typeof FAIRY_DIALOGUE_DATA !== 'undefined') {
+                 dialoguePool = FAIRY_DIALOGUE_DATA['idle_stripped_home'];
+             }
+        }
+        // 4. 通常状態 (Normal)
+        else {
+            // 画像はデフォルト
+            if (typeof FAIRY_DIALOGUE_DATA !== 'undefined') {
+                dialoguePool = FAIRY_DIALOGUE_DATA['idle'];
+            }
+        }
+
+        // --- 画像の適用 ---
+        if (src !== FACE_IMAGES.NORMAL) {
+            imgEl.src = src;
+        } else {
+            this.updatePlayerExpression(); // 表情差分更新
+        }
+
+        // --- セリフプールの適用 ---
+        // 取得できなかった場合はデフォルト(idle)を使う
+        if (!dialoguePool && typeof FAIRY_DIALOGUE_DATA !== 'undefined') {
+            dialoguePool = FAIRY_DIALOGUE_DATA['idle'];
+        }
+        this.currentDialoguePool = dialoguePool || [];
+    }
+    
     /**
      * 強制脱衣処理 (Magic Overload Strip)
      * 魔法の暴走や副作用により、強制的に脱衣状態にする
@@ -4975,6 +5123,20 @@ adjustSpringStatus(type, delta) {
      * @returns {Array} テキストオブジェクト({text, dialogue})の配列
      */
     getDungeonFlavorCandidates() {
+        // 特殊状態: 興奮状態でダンジョンに突入した場合
+        if (this.player.flags.isExcitedEntry) {
+            if (typeof FLAVOR_EVENT_DATA_EXCITED !== 'undefined' && typeof FLAVOR_EVENT_DATA_EXCITED.excited_entry === 'object') {
+                const shrinkLevel = this.player.shrinkLevel || 0;
+                const key = `lv${shrinkLevel}`;
+                const pool = FLAVOR_EVENT_DATA_EXCITED.excited_entry[key];
+                
+                // 対応するレベルのプールがあればそれを返し、なければ空配列を返して後続の通常処理をスキップする
+                return pool || [];
+            }
+            // データ自体が存在しない場合も、後続処理はスキップ
+            return [];
+        }
+
         let pool = [];
 
         const sLv = this.player.shrinkLevel;   // 縮小Lv
@@ -5050,6 +5212,7 @@ adjustSpringStatus(type, delta) {
         this.messageTimer = setInterval(() => this.updateFairyMessage(), 10000); // 10秒ごと
     }
 
+// 妖精のセリフ更新（連打イベント・放置ボイス含む）
     updateFairyMessage(isManual = false) {
         if (!this.isHome) return;
         
@@ -5057,42 +5220,39 @@ adjustSpringStatus(type, delta) {
         if (this.isClickLocked) return;
 
         let text = "";
+        const now = Date.now();
         
-        // --- 手動クリック処理 ---
+        // --- A. 手動クリック処理 ---
         if (isManual) {
+            this.lastMessageTime = now; // 放置タイマーリセット
+
             // 1. カウンター処理
             this.clickStreak = (this.clickStreak || 0) + 1;
             
-            // ▼▼▼ 追加: 300回通知 ▼▼▼
+            // 300回通知
             if (this.clickStreak === 300) {
-                this.showToast("そのくらいにしてあげませんか……？", "system"); // systemスタイル等は適宜
+                this.showToast("そのくらいにしてあげませんか……？", "system");
             }
 
-            // ---------------------------------------------------------
-            // ▼ タイマー設定: 連打が途切れたら状態をリセット
-            // ---------------------------------------------------------
+            // リセットタイマー設定
             if (this.clickStreakTimer) clearTimeout(this.clickStreakTimer);
             
-            // ▼ タイマー発火で段階リセット処理へ
+            // タイマー発火で段階リセット処理へ
             this.clickStreakTimer = setTimeout(() => {
-                this.processGradualReset();
-            }, 2500);
-
+                // ▼ 仕様変更: 5回以上ならセリフ付きリセット、それ未満なら静かにリセット
+                if (this.clickStreak >= 5) {
+                    this.processGradualReset();
+                } else {
+                    this.clickStreak = 0; 
+                }
+            }, 2000); 
 
             // 2. イベントデータ取得
             let eventData = null;
             let isLimitLoop = false;
             let isLimitBreath = false;
 
-            // A. 150回超えのループ判定 (160, 170, 180...)
-            if (this.clickStreak > 150 && this.clickStreak % 10 === 0) {
-                isLimitLoop = true;
-            }
-            // B. 通常ステップ判定 (10, 20... 150)
-            else if (typeof CLICK_EVENT_DIALOGUE !== 'undefined' && CLICK_EVENT_DIALOGUE[`count_${this.clickStreak}`]) {
-                eventData = CLICK_EVENT_DIALOGUE[`count_${this.clickStreak}`];
-            }
-            // A. 150回超えのループ判定
+            // 150回超え判定
             if (this.clickStreak > 150) {
                 if (this.clickStreak % 10 === 0) {
                     isLimitLoop = true; // 10回ごとの長文
@@ -5100,227 +5260,158 @@ adjustSpringStatus(type, delta) {
                     isLimitBreath = true; // それ以外は喘ぎ
                 }
             }
-            // B. 通常ステップ判定
-            else if (CLICK_EVENT_DIALOGUE[`count_${this.clickStreak}`]) {
+            // 通常イベント判定 (10, 20... 150)
+            else if (typeof CLICK_EVENT_DIALOGUE !== 'undefined' && CLICK_EVENT_DIALOGUE[`count_${this.clickStreak}`]) {
                 eventData = CLICK_EVENT_DIALOGUE[`count_${this.clickStreak}`];
             }
 
-            // 3. イベント実行
+            // 3. イベント実行 & セリフ決定
             if (isLimitLoop) {
-                // 打ち止めループ用セリフ
-                text = this.getRandomDialogue(CLICK_EVENT_DIALOGUE.limit_loop);
-                // 演出は弱めの揺れで固定
-                this.ui.playerImg.classList.remove('shake', 'shake_strong'); // 重複防止
-                void this.ui.playerImg.offsetWidth; // リフロー
-                this.ui.playerImg.classList.add('shake');
-                setTimeout(() => this.ui.playerImg.classList.remove('shake'), 200);
-            }
-            else if (isLimitBreath) {
-                // ▼ 新規: 短い喘ぎ
-                text = this.getRandomDialogue(LIMIT_BREATH_DIALOGUE);
-                // 演出は控えめに
-                this.ui.playerImg.classList.remove('shake', 'shake_strong');
-                void this.ui.playerImg.offsetWidth;
-                this.ui.playerImg.classList.add('shake');
-                setTimeout(() => this.ui.playerImg.classList.remove('shake'), 200);
+                if (typeof CLICK_EVENT_DIALOGUE !== 'undefined' && CLICK_EVENT_DIALOGUE.limit_loop) {
+                    text = this.getRandomDialogue(CLICK_EVENT_DIALOGUE.limit_loop);
+                }
+                this.triggerShake('shake-char');
             } 
+            else if (isLimitBreath) {
+                if (typeof LIMIT_BREATH_DIALOGUE !== 'undefined') {
+                    text = this.getRandomDialogue(LIMIT_BREATH_DIALOGUE);
+                }
+                this.triggerShake('shake-char');
+            }
             else if (eventData) {
-                // ▼▼▼ 先に状態を変更して立ち絵を変える (タイミング同期) ▼▼▼
-
-                // ゲーム内イベント実行 (strip / expand)
+                // --- キリ番イベント (10, 20, 30...) ---
                 if (eventData.event) {
+                    // 脱衣・膨張処理
                     if (eventData.event === 'strip') {
-                        // 強制脱衣 (ステータス付与のみ、ログは出さない)
                         if (!this.player.hasStatus('undressing') && !this.player.isLiberated) {
                             this.player.addStatus('undressing', 99);
                         }
                     } 
                     else if (eventData.event.startsWith('expand')) {
-                        // 膨張 (Lvを加算)
-                        // 通常上限(Lv3)を無視して加算する
                         if (this.player.expansionLevel < 4) {
                             this.player.expansionLevel++;
                         }
                     }
-                    // ★重要: 立ち絵とUIを即座に更新
                     this.updateCharacterSprite();
                     this.updateStatsUI();
                 }
 
-                // アクション演出 (shake / shake_strong)
                 if (eventData.action) {
-                    this.ui.playerImg.classList.remove('shake', 'shake_strong'); // クラス削除
-                    void this.ui.playerImg.offsetWidth; // 強制リフロー(再生用)
-                    this.ui.playerImg.classList.add(eventData.action);
-                    
-                    // アニメーション終了後にクラスを外す
-                    setTimeout(() => this.ui.playerImg.classList.remove(eventData.action), 500);
+                    let animClass = 'shake-char';
+                    if (eventData.action === 'shake_strong') animClass = 'shake-char-strong';
+                    this.triggerShake(animClass);
                 }
 
-                // セリフの決定（配列からランダム）
-                text = this.getRandomDialogue(eventData.text);
+                if (eventData.text) {
+                    text = this.getRandomDialogue(eventData.text);
+                }
+            }
+            else {
+                // --- イベント以外の回 (1-9, 11-19...) ---
+                
+                // ▼ 仕様変更: 30回(脱衣)までは毎回喋る
+                const forceSpeak = (this.clickStreak < 30);
+                // 確率判定 (30回以降は30%の確率で喋る)
+                // ※デバッグ中はここを < 1.0 にすれば毎回喋ります
+                const isLucky = Math.random() < 0.3;
+                
+                // 「30回未満」または「30%の確率」でセリフ
+                if (forceSpeak || isLucky) {
+                    if (forceSpeak) {
+                        // 30回未満: 従来通り、現在の状態(currentDialoguePool)から喋る
+                        text = this.getRandomDialogueFromPool();
+                    } else {
+                        // 30回以上(30%当選): 新しい「条件分岐なし」プールから取得
+                        if (typeof FAIRY_DIALOGUE_DATA !== 'undefined' && FAIRY_DIALOGUE_DATA.touch_random_mix) {
+                            text = this.getRandomDialogue(FAIRY_DIALOGUE_DATA.touch_random_mix);
+                        }
+                    }
+                    
+                    // 抽選に当たったのにセリフが空だった場合
+                    if (!text) {
+                    }
+
+                    if (text) {
+                        this.triggerShake('shake-char');
+                    }
+                } else {
+                    // 70%の確率 (Passive / 塩対応)
+                    // 状況に応じたセリフを取得する
+                    let stateKey = null;
+                    const expLv = this.player.expansionLevel || 0;
+
+                    if (expLv >= 3) stateKey = 'expansion_lv3';
+                    else if (expLv === 2) stateKey = 'expansion_lv2';
+                    else if (expLv === 1) stateKey = 'expansion_lv1';
+                    else if (this.player.isLiberated || this.player.hasStatus('undressing')) stateKey = 'stripped';
+
+                    if (stateKey && typeof FAIRY_DIALOGUE_DATA !== 'undefined' && FAIRY_DIALOGUE_DATA.touch_passive) {
+                        const passivePool = FAIRY_DIALOGUE_DATA.touch_passive[stateKey];
+                        if (passivePool && Array.isArray(passivePool)) {
+                            text = this.getRandomDialogue(passivePool);
+                        }
+                    }
+
+                    if (text) {
+                        // 控えめな揺れ演出
+                        this.triggerShake('shake-char'); 
+                    }
+                }
             }
 
-            // イベントセリフがある場合はそれを表示して終了（通常の会話抽選は行わない）
+            // --- ボタンの状態更新 ---
+            const startBtn = document.getElementById('btn-start-dungeon');
+            if (startBtn) {
+                if (this.clickStreak >= 150) {
+                    startBtn.disabled = false;
+                    startBtn.textContent = '探索開始……？';
+                } else if (this.clickStreak >= 30) {
+                    startBtn.disabled = true;
+                    startBtn.textContent = '探索開始';
+                } else {
+                    startBtn.disabled = false;
+                    startBtn.textContent = '探索開始';
+                }
+            }
+
+            // セリフがあれば表示
             if (text) {
                 this.showFairyMessage(text);
                 return; 
             }
             
-            // イベント該当回数でなければ、低確率で通常クリックセリフへ流す(既存処理)
-            // (以下、既存ロジック)
-        } else {
-            // 自動更新時はカウンターリセットしない（タイマーに任せる）
-            // もし放置ボイスでリセットしたいならここで this.clickStreak = 0;
-        }
+        } 
+        // --- B. 自動更新（放置ボイス処理） ---
+        else {
+            if (!this.lastMessageTime) this.lastMessageTime = now;
 
-        // --- 独り言ロジック (Idle Talk) ---
-        const sLv = (typeof this.player.shrinkLevel === 'number') ? this.player.shrinkLevel : 0;
-        const eLv = (typeof this.player.expansionLevel === 'number') ? this.player.expansionLevel : 0;
-        const isLiberated = this.player.isLiberated; // 解放の証装備中
-
-        // 1. 帰還直後のイベント (優先度高)
-        if (!text && this.returnState) {
-            // (既存の帰還ロジックを維持)
-            if (this.returnState === 'defeat') {
-                text = this.getRandomDialogue(FAIRY_DIALOGUE_DATA.return_defeat);
-            } else if (this.returnState === 'victory') {                
-                if (this.specialResultKey && FAIRY_DIALOGUE_DATA[this.specialResultKey]) {
-                    text = this.getRandomDialogue(FAIRY_DIALOGUE_DATA[this.specialResultKey]);
-                    this.specialResultKey = null; 
-                } else 
-                if (this.lastLootCount === 0) {
-                    text = this.getRandomDialogue(FAIRY_DIALOGUE_DATA.return_empty);
-                } else {
-                    text = this.getRandomDialogue(FAIRY_DIALOGUE_DATA.return_victory);
+            // 10秒経過で喋る
+            if (now - this.lastMessageTime > 9000) { 
+                text = this.getRandomDialogueFromPool();
+                if (text) {
+                    this.showFairyMessage(text);
+                    this.lastMessageTime = now;
                 }
             }
-            this.returnState = null;
         }
-        
-        // 2. 放置ボイス (AFK)
-        else if (!text && Date.now() - this.lastActionTime > 120000) {
-            // ▼▼▼ 修正: 放置時のセリフを膨張状態で分岐 ▼▼▼
-            let afkPool = [];
-            const currentExpansionLevel = this.player.expansionLevel || 0;
+    }
 
-            // A. 膨張Lv4 (限界突破・肉の海に溺れる)
-            if (currentExpansionLevel >= 4) {
-                afkPool = [
-                    "はぁ……っ。自分の胸なのに、抱きしめると……大きすぎて、腕が回りません。……ムニュッて潰すと、脳みそが溶けそうな快感が……。",
-                    "（胸に顔を埋めて）……んーっ、ぷはぁ。甘い匂い……。自分の肉の海に溺れちゃう……。もう、息するのも忘れて……ずっとこうしてたい……。",
-                    "あぁ、ダメ……。皮が薄すぎて、血管が透けて見えるくらい……。指でなぞるだけで、中身がビクビク震えて……イキっぱなしになっちゃう……。",
-                    "重い、熱い、苦しい……でも、気持ちいい……。見て、先端から魔力がポタポタ垂れてる……。搾ってほしいのかな？ ねえ……。",
-                    "ひぐぅ……っ！ ちょっと動いただけで、ボヨンってすごい衝撃が……！ 乳房が揺れるたびに、子宮までズンって響いて……あはぁっ♡",
-                    "もう、私の顔なんて見えなくていいです……。視界全部が、ピンク色のお肉……。世界で一番幸せな、閉鎖空間……ふふっ……。"
-                ];
-            }
-            // B. 膨張Lv3 (快楽堕ち・トランス)
-            else if (currentExpansionLevel === 3) {
-                afkPool = [
-                    "あぁっ、んあぁっ……！ ダメ、止まらない……！ お肉が揺れるたびに、頭の芯まで痺れて……ッ、イっちゃう、またイっちゃう……！",
-                    "（床に体を押し付けながら）……はぁ、はぁ……。見て、私の体……こんなに浅ましく脈打って……。もう妖精じゃなくて、ただの「快感を感じる肉袋」です……。",
-                    "ひグッ、あぁ……！ 魔力が、中から突き上げて……内臓ごと犯されてるみたい……。ねえ、もう壊して……めちゃくちゃにしてください……ッ！",
-                    "……んぅ。……今の、聞きました？ 私、自分の重みだけで……こんなに濡れて……。ふふ、恥ずかしいのに、体が喜んで止まりません……。",
-                    "あへぇ……。もう、指一本動かせない……。体中がジンジンして……頭がトロトロで……。このまま一生、こうして喘いでいたい……。"
-                ];
-            }
-            // C. 膨張Lv1-2 (敏感・自慰)
-            else if (currentExpansionLevel > 0) {
-                afkPool = [
-                    "くぅっ……！ 皮膚が薄くなってて、空気が触れるだけで乳首が……っ！ ごめんなさい、我慢できなくて……自分で、触っちゃいます……。",
-                    "はぁ……はぁ……。ダメです、見ないで……。お腹の奥が熱くて、疼いて……こうして自分で宥（なだ）めてないと、おかしくなりそうで……。",
-                    "……んっ、ぁ。ふふ、すごいです。指がズブズブ沈んでいく……。私、全身が性感帯になっちゃったみたい……気持ちいい……。",
-                    "（体を抱きしめて身悶えしながら）……んくっ。膨らんだところが擦れ合って……熱い、熱いよぉ……。ねえ、この熱、どうすれば静まりますか……？",
-                    "あぁ……魔力がパンパンに詰まってて……。ちょっと撫ただけで、中から「出して」って暴れるんです……。んぅ……っ、出ちゃいそう……。"
-                ];
-            }
-            // D. 通常時 (既存のAFKデータ)
-            else {
-                afkPool = FAIRY_DIALOGUE_DATA.afk || ["……（退屈そうにしている）"];
-            }
-            text = this.getRandomDialogue(afkPool);
+    // 汎用プールからセリフを取得するヘルパー (単純な文字配列に対応)
+    getRandomDialogueFromPool() {
+        if (!this.currentDialoguePool || !Array.isArray(this.currentDialoguePool) || this.currentDialoguePool.length === 0) {
+            return "";
         }
+        return this.currentDialoguePool[Math.floor(Math.random() * this.currentDialoguePool.length)];
+    }
 
-        // 3. 通常の抽選ループ
-        else if (!text) {
-            let pool = [...FAIRY_DIALOGUE_DATA.idle]; // 基本会話
-
-            // --- A. 複合状態 (縮小 x 膨張) ---
-            if (sLv > 0 && eLv > 0) {
-                const mixKey = `mixed_s${sLv}_e${eLv}`;
-                if (FAIRY_TALK_EXPANSION[mixKey]) {
-                    // 複合状態なら、かなりの高確率でこれを喋らせるためにpoolをこれだけで上書きしてもいいが、
-                    // ここではpoolに追加して比率を高める
-                    pool = pool.concat(FAIRY_TALK_EXPANSION[mixKey]);
-                    pool = pool.concat(FAIRY_TALK_EXPANSION[mixKey]); // 比率アップ
-                }
-            }
-
-            // --- B. 膨張状態 (単体) ---
-            if (eLv > 0) {
-                // 解放の証装備中 -> Liberation (Positive)
-                if (isLiberated) {
-                    const libKey = `liberation_lv${Math.min(3, eLv)}`;
-                    if (FAIRY_TALK_EXPANSION[libKey]) {
-                        pool = pool.concat(FAIRY_TALK_EXPANSION[libKey]);
-                    }
-                } 
-                // 未装備 -> Accident (Negative/Shy)
-                else {
-                    const accKey = `accident_lv${Math.min(3, eLv)}`;
-                    if (FAIRY_TALK_EXPANSION[accKey]) {
-                        pool = pool.concat(FAIRY_TALK_EXPANSION[accKey]);
-                    }
-                }
-                
-                // 治療拒否セリフも混ぜる
-                if (FAIRY_TALK_EXPANSION.refuse_cure) {
-                    pool = pool.concat(FAIRY_TALK_EXPANSION.refuse_cure);
-                }
-            }
-
-            // --- C. 縮小状態 (単体) ---
-            if (sLv > 0 && eLv === 0) { // 複合でない場合のみ
-                pool = pool.concat(FAIRY_DIALOGUE_DATA.shrink_idle_universal || []);
-                if (sLv === 1) pool = pool.concat(FAIRY_DIALOGUE_DATA.shrink_idle_lv1 || []);
-                if (sLv === 2) pool = pool.concat(FAIRY_DIALOGUE_DATA.shrink_idle_lv2 || []);
-                if (sLv === 3) pool = pool.concat(FAIRY_DIALOGUE_DATA.shrink_idle_lv3 || []);
-            }
-
-            // --- D. 装備・ステータス反応 (既存) ---
-            
-            // 状態異常反応
-            pool = pool.concat(FAIRY_DIALOGUE_DATA.talk_poison || []);
-            // ... (その他の状態異常) ...
-
-            // 解放の証 (Liberated) 単体のセリフ (膨張していない時)
-            if (isLiberated && eLv === 0) {
-                // 既存の脱衣セリフなどを流用、または解放専用セリフがあれば追加
-                pool = pool.concat(FAIRY_DIALOGUE_DATA.talk_stripped || []); 
-            }
-            // 通常脱衣 (Accident Strip)
-            else if (!isLiberated && this.player.hasStatus('undressing') && eLv === 0) {
-                pool = pool.concat(FAIRY_DIALOGUE_DATA.idle_stripped_home || []);
-                pool = pool.concat(FAIRY_DIALOGUE_DATA.talk_stripped || []);
-            }
-
-            // High Status / Weapon Type (既存ロジック維持)
-            if (this.player.atk >= this.player.int * 2.5) pool = pool.concat(FAIRY_DIALOGUE_DATA.high_atk || []);
-            if (this.player.int >= this.player.atk * 2.5) pool = pool.concat(FAIRY_DIALOGUE_DATA.high_int || []);
-            
-            if (this.equipment.weapon) {
-                const wName = this.equipment.weapon.name;
-                if (wName.includes("剣") || wName.includes("斧")) pool = pool.concat(FAIRY_DIALOGUE_DATA.equip_sword || []);
-                if (wName.includes("杖") || wName.includes("書")) pool = pool.concat(FAIRY_DIALOGUE_DATA.equip_wand || []);
-            }
-
-            text = this.getRandomDialogue(pool);
-        }
-
-        // 表示
-        if (text) {
-            this.showFairyMessage(text);
+    // 揺れ演出用ヘルパー
+    triggerShake(className) {
+        const pImg = document.getElementById('player-img');
+        if (pImg) {
+            pImg.classList.remove('shake-char', 'shake-char-strong');
+            void pImg.offsetWidth;
+            pImg.classList.add(className);
+            setTimeout(() => pImg.classList.remove(className), 500);
         }
     }
 
@@ -5369,6 +5460,41 @@ adjustSpringStatus(type, delta) {
         return arr[Math.floor(Math.random() * arr.length)];
     }
 
+    // ▼ 追加: 汎用セリフプールから安全に取得するヘルパー
+    getRandomDialogueFromPool() {
+        if (!this.currentDialoguePool) return "";
+
+        // パターンA: 単純な配列の場合 ([{dialogue:...}, ...])
+        if (Array.isArray(this.currentDialoguePool)) {
+            if (this.currentDialoguePool.length === 0) return "";
+            const entry = this.currentDialoguePool[Math.floor(Math.random() * this.currentDialoguePool.length)];
+            
+            // 文字列ならそのまま返す
+            if (typeof entry === 'string') return entry;
+
+            return entry.dialogue || entry.text || "";
+        }
+
+        // パターンB: カテゴリ分けされたオブジェクトの場合 ({ normal: [...], ... })
+        if (typeof this.currentDialoguePool === 'object') {
+            const keys = Object.keys(this.currentDialoguePool);
+            if (keys.length === 0) return "";
+            const key = keys[Math.floor(Math.random() * keys.length)];
+            const pool = this.currentDialoguePool[key];
+            
+            if (Array.isArray(pool) && pool.length > 0) {
+                const entry = pool[Math.floor(Math.random() * pool.length)];
+                
+                // 文字列ならそのまま返す
+                if (typeof entry === 'string') return entry;
+
+                return entry.dialogue || entry.text || "";
+            }
+        }
+
+        return "";
+    }
+
     // 連打終了後の段階的リセット処理
     async processGradualReset() {
         // ロック開始
@@ -5397,14 +5523,19 @@ adjustSpringStatus(type, delta) {
             this.updateStatsUI();
         }
 
+        // 膨張が0になった後（脱衣状態）で1秒待機
+        await wait(1000);
+
         // 脱衣状態の解除 (装備由来でなければ)
         let isEquipStrip = false;
         if (this.equipment.magic_circle && this.equipment.magic_circle.id === 'mc_lust') isEquipStrip = true;
         
         if (this.player.hasStatus('undressing') && !this.player.isLiberated && !isEquipStrip) {
-            // 脱衣解除は一瞬で行う（あるいはレベル戻しループの後で）
+            // 脱衣解除
             this.player.removeStatus('undressing');
             this.updateCharacterSprite(); // 服を着た絵に戻す
+            this.recalcStats();
+            this.updateStatsUI();
         }
 
         // ▼▼▼ 追加: 300回報酬ロジック ▼▼▼
@@ -5438,6 +5569,13 @@ adjustSpringStatus(type, delta) {
         const text = this.getRandomDialogue(dialogueList);
         
         this.showFairyMessage(text);
+        
+        // ボタンの状態を元に戻す
+        const startBtn = document.getElementById('btn-start-dungeon');
+        if (startBtn) {
+            startBtn.disabled = false;
+            startBtn.textContent = '探索開始';
+        }
 
         // ロック解除
         this.isClickLocked = false;
