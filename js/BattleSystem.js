@@ -369,6 +369,26 @@ class BattleSystem {
             this.tempInventory = data.game.tempInventory || [];
             this.canReceiveWisdom = data.game.canReceiveWisdom || false; // ロード
             this.rogueHighScore = data.game.rogueHighScore || 0;
+
+            // ▼▼▼ 追加: 誤ってインベントリ(装備倉庫)に入ったカードを救出する処理 ▼▼▼
+            const buggedCards = [];
+            // 後ろからループして安全に削除
+            for (let i = this.permInventory.length - 1; i >= 0; i--) {
+                const item = this.permInventory[i];
+                // 「コスト設定がある」または「装備品タイプではない」ものはカードとみなす
+                if (item.cost !== undefined || (item.type && !['weapon', 'armor', 'accessory', 'magic_circle'].includes(item.type))) {
+                    buggedCards.push(item);
+                    this.permInventory.splice(i, 1); // 装備枠から削除
+                }
+            }
+            
+            if (buggedCards.length > 0) {
+                this.cardPool.push(...buggedCards); // カード枠へ移動
+                console.log(`修復: ${buggedCards.length}枚のカードを装備枠からカードプールへ移動しました。`);
+                // ユーザーに通知（必要なければコメントアウト可）
+                setTimeout(() => this.showToast(`データ修復: カード${buggedCards.length}枚をデッキ倉庫へ移動しました`, 'system'), 1000);
+            }
+            // ▲▲▲ 追加ここまで ▲▲▲
             
             // ▼ 追加: コレクションの復元
             if (data.game.collection) {
@@ -2368,10 +2388,16 @@ showHome() {
         this.specialResultKey = this.checkResultDialogue(this.player, this.tempInventory);
         
         this.lastLootCount = this.tempInventory.length;
+
+        // 興奮状態で突入していた場合、帰還時に膨張レベルを下限に戻す
+        if (this.player.flags.isExcitedEntry) {
+            this.player.flags.isExcitedEntry = false;
+            this.player.expansionLevel = this.getMinExpansionLevel();
+        }
+
         this.showHome();
         this.player.minShrinkLevel = 0;
         this.player.dungeonBonus = { atk: 0, int: 0, dmgRate: 1.0 };
-        this.player.flags.isExcitedEntry = false; // 帰還時に興奮状態を解除
     }
 
     // 露出覚醒イベント判定・実行
@@ -3271,7 +3297,111 @@ showHome() {
     // カード効果の実装
     async executeCardEffect(card) {
         // [拡張] 関数定義された効果を実行 (New Cards)
-        if (card.effect && typeof card.effect === 'function') {
+        // BattleSystem.js のカード処理分岐の先頭に追加
+// -------------------------------------------------------
+
+    // 1. 【正攻法】 使えば使うほど強くなる
+    if (card.id === 'orthodox') {
+        // 探索中の累積データを初期化・取得
+        if (!this.player.runStats) this.player.runStats = {};
+        if (!this.player.runStats.orthodoxCount) this.player.runStats.orthodoxCount = 0;
+
+        // 倍率計算 (ベース1.2 + 回数 * 0.5)
+        const orthodoxBonus = this.player.runStats.orthodoxCount * 0.5;
+        const orthodoxMult = card.power + orthodoxBonus;
+
+        // ダメージ計算
+        let dmg = Math.floor(this.player.int * orthodoxMult);
+        dmg = calculateDamage(dmg, enemy.def); // 通常の防御計算
+
+        this.dealDamage(enemy, dmg);
+        this.log(`正攻法の極意！(累積+${orthodoxBonus.toFixed(1)}倍) -> ${dmg}ダメージ`);
+        
+        // カウントアップ
+        this.player.runStats.orthodoxCount++;
+        return; // 処理終了
+    }
+
+    // 2. 【純潔の光】 状態異常なしなら防御無視
+    else if (card.id === 'purity_ray') {
+        // 状態チェック (縮小Lv0 かつ 膨張Lv0 かつ 脱衣状態でない)
+        // ※Unit.jsの仕様に合わせて調整してください
+        const isNormalState = (this.player.shrinkLevel === 0 && 
+                               this.player.expansionLevel === 0 && 
+                               !this.player.hasStatus('undressing'));
+
+        // 基礎威力 (INT + DEF)
+        let purityBase = this.player.int + this.player.def;
+        let dmg = 0;
+
+        if (isNormalState) {
+            // 通常状態：防御無視
+            dmg = Math.floor(purityBase * card.power);
+            this.log(`純潔の輝きが敵を貫く！(防御無視) -> ${dmg}ダメージ！`);
+        } else {
+            // 変身中：通常の防御計算が入る
+            let rawDmg = Math.floor(purityBase * card.power);
+            dmg = calculateDamage(rawDmg, enemy.def);
+            this.log(`光が拡散してしまった…… -> ${dmg}ダメージ`);
+        }
+
+        this.dealDamage(enemy, dmg);
+        return; // 処理終了
+    }
+
+    // 3. 【ソニックブーム】 SPD依存の連撃
+    else if (card.id === 'sonic_boom') {
+        // 攻撃回数の決定 (基本1回 + 縮小レベル)
+        const hitCount = 1 + this.player.shrinkLevel;
+        this.log(`音速の衝撃！ ${hitCount}連撃！`);
+
+        const performSonic = async () => {
+            for (let i = 0; i < hitCount; i++) {
+                if (enemy.hp <= 0) break;
+                // SPD参照ダメージ
+                let rawDmg = Math.floor(this.player.spd * card.power);
+                let finalDmg = calculateDamage(rawDmg, enemy.def);
+                
+                this.dealDamage(enemy, finalDmg);
+                await wait(150); // 少し待機して連撃感を出す
+            }
+        };
+        // 非同期処理を実行(awaitできない環境ならそのまま実行)
+        performSonic();
+        return; 
+    }
+
+    // 4. 【ファントムレイン】 10回攻撃 + 回避バフ
+    else if (card.id === 'needle_dance') {
+        this.log(`残像と共に針の雨が降り注ぐ！`);
+        const ignoreDef = (this.player.shrinkLevel > 0);
+
+        const performNeedle = async () => {
+            let totalDmg = 0;
+            for (let i = 0; i < 10; i++) {
+                if (enemy.hp <= 0) break;
+                
+                let oneHit = Math.floor(this.player.int * card.power);
+                // 縮小時は防御無視(最低保証1)、それ以外は防御計算
+                oneHit = ignoreDef ? Math.max(1, oneHit) : calculateDamage(oneHit, enemy.def);
+
+                // ログが流れすぎるのを防ぐため、ダメージ表示のみ行う等の工夫があればベター
+                // ここではシンプルに実行
+                this.dealDamage(enemy, oneHit); 
+                totalDmg += oneHit;
+                await wait(50); // 高速連打
+            }
+            this.log(`合計 ${totalDmg} ダメージ！`);
+            
+            // 回避率+100% バフ付与
+            this.player.buffs.push({
+                id: 'evasion_boost', name: '完全回避', type: 'evasion', val: 100, turn: 1
+            });
+            this.log(`${this.player.name}は残像を纏った！`);
+        };
+        performNeedle();
+        return;
+    } else if (card.effect && typeof card.effect === 'function') {
             const result = card.effect(this.player, this.enemy, this);
             if (result && result.msg) {
                 this.log(result.msg);
@@ -5054,7 +5184,12 @@ updateSpringUI() {
 
         // 入手処理 (インベントリへ)
         const newCard = JSON.parse(JSON.stringify(card));
-        this.permInventory.push(newCard);
+        // ▼▼▼ 修正: permInventory(装備) ではなく cardPool(カード) に入れる ▼▼▼
+        
+        // 修正前: this.permInventory.push(newCard);
+        this.cardPool.push(newCard); 
+
+        // ▲▲▲ 修正ここまで ▲▲▲
 
         this.log(`妖精の泉から『${newCard.name}』を授かった！`);
         this.showToast(`魔法カード『${newCard.name}』を獲得！`, "success");
@@ -5125,6 +5260,15 @@ adjustSpringStatus(type, delta) {
     getDungeonFlavorCandidates() {
         // 特殊状態: 興奮状態でダンジョンに突入した場合
         if (this.player.flags.isExcitedEntry) {
+            // ▼ 追加: 解放状態なら専用データを使用
+            if (this.player.isLiberated && typeof FLAVOR_EVENT_DATA_EXCITED_LIBERATION !== 'undefined') {
+                const shrinkLevel = this.player.shrinkLevel || 0;
+                const key = `lv${shrinkLevel}`;
+                if (FLAVOR_EVENT_DATA_EXCITED_LIBERATION.excited_entry && FLAVOR_EVENT_DATA_EXCITED_LIBERATION.excited_entry[key]) {
+                    return FLAVOR_EVENT_DATA_EXCITED_LIBERATION.excited_entry[key];
+                }
+            }
+
             if (typeof FLAVOR_EVENT_DATA_EXCITED !== 'undefined' && typeof FLAVOR_EVENT_DATA_EXCITED.excited_entry === 'object') {
                 const shrinkLevel = this.player.shrinkLevel || 0;
                 const key = `lv${shrinkLevel}`;
@@ -5252,6 +5396,11 @@ adjustSpringStatus(type, delta) {
             let isLimitLoop = false;
             let isLimitBreath = false;
 
+            // ▼ 追加: データソースの切り替え
+            const clickData = (this.player.isLiberated && typeof CLICK_EVENT_DIALOGUE_LIBERATION !== 'undefined') 
+                              ? CLICK_EVENT_DIALOGUE_LIBERATION 
+                              : CLICK_EVENT_DIALOGUE;
+
             // 150回超え判定
             if (this.clickStreak > 150) {
                 if (this.clickStreak % 10 === 0) {
@@ -5261,14 +5410,14 @@ adjustSpringStatus(type, delta) {
                 }
             }
             // 通常イベント判定 (10, 20... 150)
-            else if (typeof CLICK_EVENT_DIALOGUE !== 'undefined' && CLICK_EVENT_DIALOGUE[`count_${this.clickStreak}`]) {
-                eventData = CLICK_EVENT_DIALOGUE[`count_${this.clickStreak}`];
+            else if (clickData && clickData[`count_${this.clickStreak}`]) {
+                eventData = clickData[`count_${this.clickStreak}`];
             }
 
             // 3. イベント実行 & セリフ決定
             if (isLimitLoop) {
-                if (typeof CLICK_EVENT_DIALOGUE !== 'undefined' && CLICK_EVENT_DIALOGUE.limit_loop) {
-                    text = this.getRandomDialogue(CLICK_EVENT_DIALOGUE.limit_loop);
+                if (clickData && clickData.limit_loop) {
+                    text = this.getRandomDialogue(clickData.limit_loop);
                 }
                 this.triggerShake('shake-char');
             } 
@@ -5564,8 +5713,14 @@ adjustSpringStatus(type, delta) {
 
         // 完了後のセリフ再生
         // 直前まで到達していたレベルに応じて分岐
+        
+        // ▼ 追加: データソースの切り替え
+        const resetData = (this.player.isLiberated && typeof RESET_DIALOGUE_LIBERATION !== 'undefined')
+                          ? RESET_DIALOGUE_LIBERATION
+                          : RESET_DIALOGUE;
+
         const dialogueKey = `lv${maxReachedLv}`;
-        const dialogueList = RESET_DIALOGUE[dialogueKey] || RESET_DIALOGUE['lv0'];
+        const dialogueList = resetData[dialogueKey] || resetData['lv0'];
         const text = this.getRandomDialogue(dialogueList);
         
         this.showFairyMessage(text);
