@@ -28,9 +28,16 @@ class Unit {
         this.uniqueStatus = null;  // 敵が使用する固有状態異常
         this.curse = 0; // 敵に蓄積された呪い値
         this.counterStance = null; // カウンター待機状態
+        this.isUniqueBoss = false; // ユニークボスフラグ
+        this.uniqueBossId = null;  // ユニークボスID (階層)
         this.minShrinkLevel = 0;   // 縮小化の下限
         this.dungeonBonus = { atk: 0, int: 0, dmgRate: 1.0 }; // ダンジョン内ボーナス
         this.expansionLevel = 0; // 膨張レベル (0:なし, 1~3:段階)
+
+        // 永続的な統計データ (セーブ対象)
+        this.permanentStats = {
+            maxFloor: 0 // 最高到達階層
+        };
 
         // 統計データ (Stats Tracking)
         this.runStats = {

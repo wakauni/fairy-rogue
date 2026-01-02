@@ -70,6 +70,7 @@ class BattleSystem {
         this.clickStreak = 0; // 連打カウンター
         this.isClickLocked = false; // クリック連打イベントのリセット演出用ロック
 
+        this.lastFairyDialogue = null; // 直前のセリフを記憶
         // ▼ 追加: ログ管理用変数
         this.logQueue = [];         // ログの待ち行列
         this.isProcessingLog = false; // 現在ログを出力中かどうかのフラグ
@@ -180,6 +181,7 @@ class BattleSystem {
             player: {
                                 // ... (既存のhp, maxHpなどの保存) ...
                 baseStats: this.playerBaseStats, 
+                permanentStats: this.player.permanentStats,
                 hp: this.player.hp,
                 maxHp: this.player.maxHp,
                 atk: this.player.atk,
@@ -266,6 +268,7 @@ class BattleSystem {
             
             // ▼▼▼ 追加: 基礎ステータスの復元 (なければデフォルト) ▼▼▼
             this.playerBaseStats = data.player.baseStats || { ...DEFAULT_PLAYER_STATS };
+            this.player.permanentStats = data.player.permanentStats || { maxFloor: 0 };
 
             // プレイヤー復元
             Object.assign(this.player, data.player);
@@ -635,6 +638,7 @@ showHome() {
                 <button class="btn" onclick="game.renderLogTab('accessory', this)">装飾品</button>
                 <button class="btn" onclick="game.renderLogTab('magic_circle', this)">魔法陣</button>
                 <button class="btn" onclick="game.renderLogTab('status', this)">状態異常</button>
+                <button class="btn" onclick="game.renderLogTab('diary', this)">日記</button>
             </div>
 
             <div id="log-content-area" style="flex:1; overflow-y:auto; background:rgba(0,0,0,0.3); padding:10px; border-radius:4px;">
@@ -703,8 +707,36 @@ showHome() {
                 listHtml += this.createLogItemHtml(status.name, status.desc || "詳細不明", isUnlocked, "💀");
             });
         }
+        // D. 日記タブ
+        else if (category === 'diary') {
+            if (typeof DIARY_DATA !== 'undefined') {
+                const maxFloor = this.player.permanentStats.maxFloor || 0;
+                DIARY_DATA.forEach((entry, index) => {
+                    const unlockFloor = (index + 1) * 20;
+                    const isUnlocked = maxFloor >= unlockFloor;
+                    listHtml += this.createDiaryItemHtml(entry, unlockFloor, isUnlocked);
+                });
+            } else {
+                listHtml = `<div style="color:#aaa; text-align:center; margin-top:50px;">日記データが見つかりません</div>`;
+            }
+        }
 
         area.innerHTML = listHtml;
+    }
+
+    // 日記用HTML生成ヘルパー
+    createDiaryItemHtml(entry, unlockFloor, isUnlocked) {
+        const color = isUnlocked ? '#fff' : '#777';
+        const bg = isUnlocked ? 'rgba(255,255,255,0.1)' : 'rgba(0,0,0,0.2)';
+        const titleText = isUnlocked ? entry.title : `第${unlockFloor / 20}話 ？？？？？`;
+        const contentText = isUnlocked ? entry.content.replace(/\n/g, '<br>') : `（到達階層 ${unlockFloor}F で解禁）`;
+
+        return `
+            <div style="background:${bg}; border:1px solid ${isUnlocked ? '#aaa' : '#444'}; padding:15px; margin-bottom:10px; border-radius:4px;">
+                <div style="font-weight:bold; color:${color}; font-size:16px; margin-bottom:8px;">${titleText}</div>
+                <div style="font-size:13px; color:#ccc; line-height:1.6;">${contentText}</div>
+            </div>
+        `;
     }
 
     // HTML生成ヘルパー
@@ -1008,8 +1040,21 @@ showHome() {
             }
         }
 
+        // 膨張無効 (nullifyExpansion)
+        let nullifyExp = false;
+        Object.values(this.equipment).forEach(item => {
+            if (item && item.passive && item.passive.nullifyExpansion) nullifyExp = true;
+        });
+        if (nullifyExp && amount > 0) {
+            this.log("装備の加護が膨張を防いだ！");
+            return false;
+        }
+
+        // 上限レベルを決定。通常は3だが、装備効果で下限が4に設定されている場合は4を上限とする
+        const maxLevel = Math.max(3, this.getMinExpansionLevel());
+
         const oldLv = this.player.expansionLevel;
-        this.player.expansionLevel = Math.max(0, Math.min(3, this.player.expansionLevel + amount));
+        this.player.expansionLevel = Math.max(0, Math.min(maxLevel, this.player.expansionLevel + amount));
 
         if (this.player.expansionLevel !== oldLv) {
             if (this.player.expansionLevel > oldLv) {
@@ -1021,6 +1066,7 @@ showHome() {
                 this.log(`膨張が収まった…… (Lv${this.player.expansionLevel})`);
             }
             this.updateCharacterSprite(); // 立ち絵更新
+            this.recalcStats();
             this.updateStatsUI();
             return true;
         }
@@ -1132,6 +1178,7 @@ showHome() {
         let addAtk = 0, addDef = 0, addInt = 0, addSpd = 0, addMaxHp = 0;
         let statMultipliers = { atk: 1.0, def: 1.0, int: 1.0, spd: 1.0, hp: 1.0 };
         let ignoreStripPenalty = false;
+        this.handLimitBonus = 0; // 手札上限ボーナス初期化
 
         // --- 3. 装備ループ ---
         Object.values(this.equipment).forEach(item => {
@@ -1169,6 +1216,9 @@ showHome() {
                 if (p.stats.spdMult) statMultipliers.spd *= p.stats.spdMult;
                 if (p.stats.hpMult)  statMultipliers.hp  *= p.stats.hpMult;
             }
+            if (p.handSizeMod) {
+                this.handLimitBonus += p.handSizeMod;
+            }
 
             // D. 個別ID補正 (色欲など)
             if (item.id === 'acc_lust_pendant') statMultipliers.def *= 1.2;
@@ -1177,6 +1227,19 @@ showHome() {
                 statMultipliers.spd *= 1.5;
             }
         });
+
+        // --- 3.5. デッキ内パッシブ効果 (deckStatBonus) ---
+        if (this.masterDeck) {
+            this.masterDeck.forEach(card => {
+                if (card.deckStatBonus) {
+                    if (card.deckStatBonus.atkRate) statMultipliers.atk += card.deckStatBonus.atkRate;
+                    if (card.deckStatBonus.defRate) statMultipliers.def += card.deckStatBonus.defRate;
+                    if (card.deckStatBonus.intRate) statMultipliers.int += card.deckStatBonus.intRate;
+                    if (card.deckStatBonus.spdRate) statMultipliers.spd += card.deckStatBonus.spdRate;
+                    if (card.deckStatBonus.hpRate)  statMultipliers.hp  += card.deckStatBonus.hpRate;
+                }
+            });
+        }
 
         // --- 4. 状態異常と変性計算 ---
         // ▼ 修正: 固定の魔法陣ならペナルティを無効化
@@ -2006,20 +2069,42 @@ showHome() {
 
         // 敵生成（階層に応じて強化）
         const scale = 1 + (this.depth * 0.1); // 1階層ごとに10%強化
-        const name = isBoss ? `フロアボス (Lv.${this.depth})` : `モンスター (Lv.${this.depth})`;
-        
-        this.enemy = new Unit(
-            name,
-            Math.floor(50 * scale),  // HP
-            Math.floor(8 * scale),   // ATK
-            Math.floor(3 * scale),   // DEF
-            5,
-            8 + this.depth,          // SPD
-            isBoss
-        );
 
-        // 敵のルーチンと個性を適用
-        this.applyEnemyRoutine(this.enemy, this.depth);
+        if (isBoss && typeof UNIQUE_BOSSES !== 'undefined' && UNIQUE_BOSSES[this.depth]) {
+            const bossData = UNIQUE_BOSSES[this.depth];
+            this.enemy = new Unit(
+                `${bossData.name} (Lv.${this.depth})`,
+                Math.floor(50 * scale),
+                Math.floor(8 * scale),
+                Math.floor(3 * scale),
+                5,
+                8 + this.depth,
+                true
+            );
+            this.enemy.isUniqueBoss = true;
+            this.enemy.uniqueBossId = this.depth;
+
+            if (bossData.statMod) {
+                Object.keys(bossData.statMod).forEach(key => {
+                    if (key === 'hp') this.enemy.maxHp = Math.floor(this.enemy.maxHp * bossData.statMod[key]);
+                    else if (this.enemy[key] !== undefined) this.enemy[key] = Math.floor(this.enemy[key] * bossData.statMod[key]);
+                });
+            }
+            this.enemy.hp = this.enemy.maxHp;
+
+        } else {
+            const name = isBoss ? `フロアボス (Lv.${this.depth})` : `モンスター (Lv.${this.depth})`;
+            this.enemy = new Unit(
+                name,
+                Math.floor(50 * scale),
+                Math.floor(8 * scale),
+                Math.floor(3 * scale),
+                5,
+                8 + this.depth,
+                isBoss
+            );
+            this.applyEnemyRoutine(this.enemy, this.depth);
+        }
 
         this.log(`${this.enemy.name} が現れた！`);
         
@@ -2031,6 +2116,12 @@ showHome() {
             if (p.type === 'start_charge') {
                 this.player.weaponCharge = true;
                 this.log("達人の鞘により、必殺技の準備が完了している！");
+            }
+
+            // 1.5. スピカの名札 (開幕チャージ)
+            if (p.startCharge) {
+                this.player.weaponCharge = true;
+                this.log("スピカの名札が輝き、力がみなぎっている！");
             }
 
             // 2. 守護者の紋章 (盾装備時、3ターンDEF+50%)
@@ -2193,6 +2284,11 @@ showHome() {
         
         // 3. 敵オブジェクトに情報をセット
         enemy.routineId = routine.id;
+
+        // ▼ 追加: ルーチン名があれば敵の名前を上書き (ボス以外)
+        if (!enemy.isBoss && routine.name) {
+            enemy.name = `${routine.name} (Lv.${depth})`;
+        }
         
         // 4. ステータス補正
         if (routine.statMod) {
@@ -2368,6 +2464,16 @@ showHome() {
     // 帰還処理（生還）
     returnHome() {
         this.returnState = 'victory';
+
+        // 通常モードでのみ永続データを更新
+        if (this.mode !== 'rogue') {
+            if (this.player.runStats && this.player.permanentStats) {
+                this.player.permanentStats.maxFloor = Math.max(
+                    this.player.permanentStats.maxFloor || 0,
+                    this.player.runStats.maxFloor || 0
+                );
+            }
+        }
 
         // ローグライクモード終了処理
         if (this.mode === 'rogue') {
@@ -2765,6 +2871,8 @@ showHome() {
                 default:
                     this.enemyNextAction = { type: 'wait', label: '...', icon: '?', damageScale: 0 };
             }
+        } else if (typeof rawAction === 'object') {
+            this.enemyNextAction = rawAction;
         } else {
             // オブジェクト型のアクション (スキル等)
             if (rawAction.type === 'skill_status') {
@@ -2789,6 +2897,18 @@ showHome() {
 
     // 敵の行動決定ロジック (AI)
     decideEnemyAction(enemy, turnCount) {
+        if (enemy.isUniqueBoss && enemy.uniqueBossId && typeof UNIQUE_BOSSES !== 'undefined') {
+            const bossData = UNIQUE_BOSSES[enemy.uniqueBossId];
+            if (bossData && bossData.routine) {
+                const action = bossData.routine(enemy, turnCount, this.player, this);
+                // 指示がないターンは攻撃か強撃をランダムで使う
+                if (action === 'random_attack') {
+                    return Math.random() < 0.5 ? 'attack' : 'heavy_attack';
+                }
+                return action;
+            }
+        }
+
         const id = enemy.routineId || 'w_basic';
         
         switch (id) {
@@ -2854,17 +2974,13 @@ showHome() {
         const acc = this.equipment.accessory;
         if (acc && acc.id === 'acc_click_start') {
             if (this.player.hasStatus('undressing') || this.player.isLiberated || this.player.expansionLevel > 0) {
-                if (this.player.expansionLevel < 4) {
-                    this.player.expansionLevel++;
-                    this.log("淫魔のチョーカーが反応し、体が膨らんだ！");
+                if (this.processExpansion(1)) {
+                    this.log("淫魔のチョーカーが反応した！");
                 }
             } else {
                 this.processForceStrip();
                 this.log("淫魔のチョーカーにより、服が弾け飛んだ！");
             }
-            this.updateCharacterSprite();
-            this.recalcStats();
-            this.updateStatsUI();
         }
 
         this.isPlayerTurn = true;
@@ -3107,6 +3223,11 @@ showHome() {
                         hitCount += this.player.expansionLevel;
                     }
                     
+                    // スピカの名札: 通常攻撃回数+2
+                    if (this.equipment.accessory && this.equipment.accessory.passive && this.equipment.accessory.passive.extraAttacks) {
+                        hitCount += this.equipment.accessory.passive.extraAttacks;
+                    }
+
                     // 攻撃回数分ループ
                     for (let i = 0; i < hitCount; i++) {
                         // 2回目以降は少しウェイトを入れる（演出用）
@@ -3311,11 +3432,11 @@ showHome() {
         const orthodoxMult = card.power + orthodoxBonus;
 
         // ダメージ計算
-        let dmg = Math.floor(this.player.int * orthodoxMult);
-        dmg = calculateDamage(dmg, enemy.def); // 通常の防御計算
+        const rawDmg = Math.floor(this.player.int * orthodoxMult);
+        const dmg = this.enemy.takeDamage(rawDmg); // 通常の防御計算はtakeDamage内
 
-        this.dealDamage(enemy, dmg);
         this.log(`正攻法の極意！(累積+${orthodoxBonus.toFixed(1)}倍) -> ${dmg}ダメージ`);
+        this.animateEnemyDamage();
         
         // カウントアップ
         this.player.runStats.orthodoxCount++;
@@ -3336,16 +3457,17 @@ showHome() {
 
         if (isNormalState) {
             // 通常状態：防御無視
-            dmg = Math.floor(purityBase * card.power);
+            const rawDmg = Math.floor(purityBase * card.power);
+            dmg = this.enemy.takeDamage(rawDmg, true); // 第2引数trueで防御無視
             this.log(`純潔の輝きが敵を貫く！(防御無視) -> ${dmg}ダメージ！`);
         } else {
             // 変身中：通常の防御計算が入る
-            let rawDmg = Math.floor(purityBase * card.power);
-            dmg = calculateDamage(rawDmg, enemy.def);
+            const rawDmg = Math.floor(purityBase * card.power);
+            dmg = this.enemy.takeDamage(rawDmg);
             this.log(`光が拡散してしまった…… -> ${dmg}ダメージ`);
         }
-
-        this.dealDamage(enemy, dmg);
+        
+        this.animateEnemyDamage();
         return; // 処理終了
     }
 
@@ -3357,17 +3479,18 @@ showHome() {
 
         const performSonic = async () => {
             for (let i = 0; i < hitCount; i++) {
-                if (enemy.hp <= 0) break;
+                if (this.enemy.hp <= 0) break;
                 // SPD参照ダメージ
-                let rawDmg = Math.floor(this.player.spd * card.power);
-                let finalDmg = calculateDamage(rawDmg, enemy.def);
+                const rawDmg = Math.floor(this.player.spd * card.power);
+                const finalDmg = this.enemy.takeDamage(rawDmg);
                 
-                this.dealDamage(enemy, finalDmg);
+                this.log(`${i+1}撃目: ${finalDmg}ダメージ！`);
+                this.animateEnemyDamage();
                 await wait(150); // 少し待機して連撃感を出す
             }
         };
         // 非同期処理を実行(awaitできない環境ならそのまま実行)
-        performSonic();
+        await performSonic();
         return; 
     }
 
@@ -3379,27 +3502,93 @@ showHome() {
         const performNeedle = async () => {
             let totalDmg = 0;
             for (let i = 0; i < 10; i++) {
-                if (enemy.hp <= 0) break;
+                if (this.enemy.hp <= 0) break;
                 
                 let oneHit = Math.floor(this.player.int * card.power);
                 // 縮小時は防御無視(最低保証1)、それ以外は防御計算
-                oneHit = ignoreDef ? Math.max(1, oneHit) : calculateDamage(oneHit, enemy.def);
-
-                // ログが流れすぎるのを防ぐため、ダメージ表示のみ行う等の工夫があればベター
-                // ここではシンプルに実行
-                this.dealDamage(enemy, oneHit); 
-                totalDmg += oneHit;
+                // takeDamageは内部で防御計算を行うため、防御無視の場合は第2引数で制御
+                const dmg = this.enemy.takeDamage(oneHit, ignoreDef);
+                
+                totalDmg += dmg;
+                this.animateEnemyDamage();
                 await wait(50); // 高速連打
             }
             this.log(`合計 ${totalDmg} ダメージ！`);
             
             // 回避率+100% バフ付与
             this.player.buffs.push({
-                id: 'evasion_boost', name: '完全回避', type: 'evasion', val: 100, turn: 1
+                id: 'evasion_boost', name: '完全回避', type: 'evasion', val: 100, remaining: 1
             });
             this.log(`${this.player.name}は残像を纏った！`);
         };
-        performNeedle();
+        await performNeedle();
+        return;
+    }
+
+    // 5. 【マジックダーツ】 3回保証 + 80%継続
+    else if (card.id === 'magic_darts') {
+        let hits = 0;
+        const performDarts = async () => {
+            // 最低保証 3回
+            for (let i = 0; i < 3; i++) {
+                if (this.enemy.hp <= 0) break;
+                const rawDmg = Math.floor(this.player.int * card.power);
+                const dmg = this.enemy.takeDamage(rawDmg);
+                hits++;
+                this.log(`${hits}発目: ${dmg}ダメージ！`);
+                this.animateEnemyDamage();
+                await wait(150);
+            }
+            // 追撃判定 (80%)
+            while (this.enemy.hp > 0 && Math.random() < 0.8) {
+                const rawDmg = Math.floor(this.player.int * card.power);
+                const dmg = this.enemy.takeDamage(rawDmg);
+                hits++;
+                this.log(`追撃(${hits}): ${dmg}ダメージ！`);
+                this.animateEnemyDamage();
+                await wait(150);
+                
+                if (hits > 20) break; // 無限ループ防止
+            }
+        };
+        await performDarts();
+        return;
+    }
+
+    // 6. 【アダプト・エーテル】 状態に応じて永続強化
+    else if (card.id === 'adapt_ether') {
+        let effects = [];
+        
+        // 縮小: SPD強化
+        if (this.player.shrinkLevel > 0) {
+            const val = this.player.shrinkLevel * 5;
+            this.playerBaseStats.spd += val;
+            effects.push(`SPD+${val}`);
+        }
+        
+        // 膨張: ATK強化
+        else if (this.player.expansionLevel > 0) {
+            const val = this.player.expansionLevel * 5;
+            this.playerBaseStats.atk += val;
+            effects.push(`ATK+${val}`);
+        }
+        
+        // 脱衣/解放: INT強化
+        else if (this.player.hasStatus('undressing') || this.player.isLiberated) {
+            const val = 10;
+            this.playerBaseStats.int += val;
+            effects.push(`INT+${val}`);
+        }
+        
+        // 何もなし: 最大HP強化
+        else if (effects.length === 0) {
+            this.playerBaseStats.maxHp += 10;
+            this.player.heal(10);
+            effects.push(`最大HP+10`);
+        }
+
+        this.log(`エーテル適応！ 基礎ステータス強化: ${effects.join(', ')}`);
+        this.recalcStats();
         return;
     } else if (card.effect && typeof card.effect === 'function') {
             const result = card.effect(this.player, this.enemy, this);
@@ -3553,8 +3742,28 @@ showHome() {
             this.log(`次元斬！敵に ${dmg} のダメージ！`);
             this.animateEnemyDamage();
             if (this.enemy.isDead()) {
-                this.log("空間を切り裂き、階層をスキップ！");
-                this.depth += 3;
+                const skipAmount = 3;
+                const currentDepth = this.depth;
+                const targetDepth = currentDepth + skipAmount;
+                // 次の10の倍数の階層（ボスフロア）を計算
+                const nextBossFloor = Math.floor(currentDepth / 10) * 10 + 10;
+
+                let finalDepth;
+                if (targetDepth >= nextBossFloor) {
+                    finalDepth = nextBossFloor - 1;
+                    this.log(`空間を切り裂いたが、強大な気配の前で止まった！`);
+                } else {
+                    finalDepth = targetDepth;
+                    this.log(`空間を切り裂き、階層をスキップ！`);
+                }
+                
+                const actualSkipped = finalDepth - currentDepth;
+                if (actualSkipped > 0) {
+                    this.depth = finalDepth;
+                    this.log(`(結果: ${actualSkipped}フロア進んだ)`);
+                } else {
+                    this.log(`(しかし、すぐ先に強大な気配があり進めなかった)`);
+                }
             }
         } else if (card.type === 'buff_drop') {
             this.player.dropQualityBonus = 10;
@@ -3880,6 +4089,11 @@ if (this.enemy && this.enemy.curse > 0) {
                 const bRes = this.player.applyBarrier(rawDmg);
                 rawDmg = bRes.damage;
 
+                // スピカの名札: 被ダメージ軽減
+                if (this.equipment.accessory && this.equipment.accessory.passive && this.equipment.accessory.passive.dmgCut) {
+                    rawDmg = Math.floor(rawDmg * (1.0 - this.equipment.accessory.passive.dmgCut));
+                }
+
                 // 膨張: 被ダメージ軽減 (風船の護符)
                 if (this.equipment.accessory && this.equipment.accessory.passive && this.equipment.accessory.passive.type === 'expansion_dmg_cut' && this.player.expansionLevel > 0) {
                     rawDmg = Math.floor(rawDmg * 0.7);
@@ -3960,6 +4174,145 @@ if (this.enemy && this.enemy.curse > 0) {
                 this.log("体が元の大きさに戻った！");
                 this.updateStatsUI();
             }
+        } else if (action.type === 'stomp') { // ジャイアント
+            let dmg = this.player.takeDamage(Math.floor(this.enemy.atk * 1.8), true); // 必中・高威力
+            this.log(`ストンプ！ ${dmg} の大ダメージを受けた！`);
+            this.updateStatsUI();
+        } else if (action.type === 'entangle') { // ローパーホール
+            let dmg = this.player.takeDamage(Math.floor(this.enemy.atk * (1 + this.player.expansionLevel * 0.5)));
+            this.log(`からみつき！ ${dmg} のダメージ！`);
+            this.updateStatsUI();
+        } else if (action.type === 'flare_pillar') { // 魔術師の幻影
+            let dmg = this.player.takeDamage(Math.floor(this.enemy.atk * 1.2));
+            this.log(`フレアピラー！ ${dmg} のダメージ！`);
+            if (dmg > 0) {
+                this.processForceStrip();
+                this.log("熱波で衣服が燃え尽きた！");
+            }
+            this.updateStatsUI();
+        } else if (action.type === 'hot_breath') { // ドラゴン
+            let dmg = this.player.takeDamage(Math.floor(this.enemy.atk * 1.2));
+            this.log(`ホットブレス！ ${dmg} のダメージ！`);
+            if (dmg > 0) {
+                this.applyStatus('fear', 3);
+            }
+            this.updateStatsUI();
+        } else if (action.type === 'trash_blow') { // グラディエーター
+            let dmg = this.player.takeDamage(Math.floor(this.enemy.atk * 1.2));
+            this.log(`トラッシュブロー！ ${dmg} のダメージ！`);
+            if (dmg > 0) {
+                this.deck.reloadHand();
+                this.renderHandCards();
+                this.log("衝撃で手札が吹き飛んだ！");
+            }
+            this.updateStatsUI();
+        } else if (action.type === 'stone_blow') { // 守衛の石像
+            let power = this.player.hasStatus('petrification') ? 2.0 : 1.2;
+            let dmg = this.player.takeDamage(Math.floor(this.enemy.atk * power));
+            this.log(`ストーンブロー！ ${dmg} のダメージ！`);
+            if (dmg > 0) {
+                this.applyStatus('petrification', 99);
+            }
+            this.updateStatsUI();
+        } else if (action.type === 'little_powder') { // 転生の蝶
+            let dmg = this.player.takeDamage(Math.floor(this.enemy.atk * 0.5));
+            this.log(`リトルパウダー！ ${dmg} のダメージ！`);
+            if (dmg > 0) {
+                this.player.shrinkLevel = Math.min(3, this.player.shrinkLevel + 2);
+                this.recalcStats();
+                this.log("体が急激に縮んでいく！");
+            }
+            this.updateStatsUI();
+        } else if (action.type === 'heavy_slash') { // 鎧の騎士
+            if (Math.random() < 0.3) {
+                this.log("ヘビースラッシュ！ しかし攻撃は空を切った！");
+            } else {
+                let dmg = this.player.takeDamage(Math.floor(this.enemy.atk * 2.0));
+                this.log(`ヘビースラッシュ！ ${dmg} の大ダメージ！`);
+            }
+            this.updateStatsUI();
+        } else if (action.type === 'dark_breath') { // カオスドラゴン
+            let dmg = this.player.takeDamage(Math.floor(this.enemy.atk * 1.2));
+            this.log(`ダークブレス！ ${dmg} のダメージ！`);
+            if (dmg > 0) {
+                const statuses = ['poison', 'fear', 'distraction'];
+                const randomStatus = statuses[Math.floor(Math.random() * statuses.length)];
+                this.applyStatus(randomStatus, 3);
+            }
+            this.updateStatsUI();
+        } else if (action.type === 'duo_step') { // ダンサードール
+            this.player.shrinkLevel = 3;
+            this.recalcStats();
+            this.log("デュオステップ！ 妖精は人形のように小さくなった！");
+            this.updateStatsUI();
+        } else if (action.type === 'fall_meteor') { // 禁術の預言書
+            let dmg = this.player.takeDamage(Math.floor(this.player.maxHp * 0.3), true);
+            this.log(`フォールメテオ！ ${dmg} のダメージ！`);
+            this.updateStatsUI();
+        } else if (action.type === 'world_end') { // 禁術の預言書
+            let dmg = this.player.takeDamage(99999, true);
+            this.log(`ワールドエンド！ 世界が崩壊する！`);
+            this.updateStatsUI();
+        } else if (action.type === 'leadership') { // 勇者？
+            this.player.addBuff({ type: 'stat_down', buffStats: { atkScale: -0.5, intScale: -0.5 }, duration: 5, name: '統率', desc: 'ATK/INT-50%' });
+            this.recalcStats();
+            this.log("統率！ 威圧され、力が抜けていく……");
+            this.updateStatsUI();
+        } else if (action.type === 'light_calibur') { // 勇者？
+            let dmg = this.player.takeDamage(99999, true);
+            this.log(`ライトカリバー！ 聖なる光が全てを焼き尽くす！`);
+            this.updateStatsUI();
+        } else if (action.type === 'welcome_gate') { // トラップハウス
+            let dmg = this.player.takeDamage(Math.floor(this.enemy.atk * 1.2));
+            this.log(`ウェルカムゲート！ ${dmg} のダメージ！`);
+            if (dmg > 0) {
+                this.applyStatus('shrink', 99);
+            }
+            this.updateStatsUI();
+        } else if (action.type === 'enjoy_doll') { // トラップハウス
+            let dmg = this.player.takeDamage(Math.floor(this.enemy.atk * 1.2));
+            this.log(`エンジョイドール！ ${dmg} のダメージ！`);
+            if (dmg > 0) {
+                this.processForceStrip();
+            }
+            this.updateStatsUI();
+        } else if (action.type === 'great_spin') { // フロートブレード
+            this.log("大回転！ 3連続攻撃！");
+            for (let i = 0; i < 3; i++) {
+                if (this.player.isDead()) break;
+                await wait(200);
+                // 回避判定
+                let hitChance = 100;
+                if (this.player.shrinkLevel > 0) {
+                    const stats = SHRINK_STATS['LV' + this.player.shrinkLevel];
+                    if (stats) hitChance -= stats.evasionAdd;
+                }
+                if (Math.random() * 100 > hitChance) {
+                    this.log(`(${i + 1}撃目) 回避！`);
+                } else {
+                    let dmg = this.player.takeDamage(this.enemy.atk);
+                    this.log(`(${i + 1}撃目) ${dmg} のダメージ！`);
+                }
+                this.updateStatsUI();
+            }
+        } else if (action.type === 'arm_rocket') { // 魔人の鎧
+            let dmg = this.player.takeDamage(Math.floor(this.enemy.atk * 1.5), true);
+            this.log(`アームロケット！ ${dmg} のダメージ！`);
+            if (dmg > 0) {
+                this.applyStatus('petrification', 99);
+            }
+            this.updateStatsUI();
+        } else if (action.type === 'sylphid') { // 妖精の影
+            this.enemy.addBuff({ type: 'evasion', val: 100, duration: 1, name: 'シルフィード' });
+            this.log("シルフィード！ 敵の姿が掻き消えた！");
+        } else if (action.type === 'chaos_bolt') { // 漆黒の魔王
+            let dmg = this.player.takeDamage(Math.floor(this.player.hp * 0.5), true);
+            this.log(`カオスボルト！ ${dmg} のダメージ！`);
+            this.updateStatsUI();
+        } else if (action.type === 'symbol_of_fear') { // 漆黒の魔王
+            let dmg = this.player.takeDamage(99999, true);
+            this.log(`畏怖の象徴！ 抗うことのできない闇が全てを飲み込む！`);
+            this.updateStatsUI();
         } else {
             this.log("敵は様子をうかがっている...");
         }
@@ -4059,6 +4412,24 @@ if (this.enemy && this.enemy.curse > 0) {
 
             // --- 画面切り替え待ち (さらに短縮) ---
             setTimeout(() => {
+                // 400層ボス初回撃破ボーナス
+                if (this.depth === 400 && isBoss && !this.player.flags.defeated_boss_400) {
+                    this.player.flags.defeated_boss_400 = true;
+                    
+                    const tag = getItemById('acc_spica_tag');
+                    const grace = getItemById('mc_archmage_grace');
+                    
+                    if (tag) {
+                        this.permInventory.push(tag);
+                        currentLoot.push(tag);
+                    }
+                    if (grace) {
+                        this.permInventory.push(grace);
+                        currentLoot.push(grace);
+                    }
+                    this.log("400層踏破！スピカの記憶が形となって現れた……！");
+                }
+
                 this.cleanupBattle(); 
                 this.inBattle = false;
 
@@ -4708,26 +5079,30 @@ applyCurseToEnemy(amount) {
                 this.player.heal(healVal);
             }
 
-            // ▼ 変更: 抽選範囲を 1~21 に拡大
-            const roll = randomInt(1, 21);
+            // ▼ 変更: 抽選範囲を 1~25 に拡大
+            const roll = randomInt(1, 25);
 
             switch (roll) {
                 // Case 1~16 (省略: 変更なし)
                 case 1: 
                     this.player.addBuff({ type: 'stat_up', buffStats: { atkScale: 1.0 }, duration: 3, name: '混沌の怪力', desc: 'ATK+100%' });
                     this.log("混沌の怪力！(ATK+100%)");
+                    this.recalcStats();
                     break;
                 case 2: 
                     this.player.addBuff({ type: 'stat_up', buffStats: { def: this.player.def }, duration: 3, name: '混沌の硬化', desc: 'DEF+100%' });
                     this.log("混沌の硬化！(DEF+100%)");
+                    this.recalcStats();
                     break;
                 case 3: 
                     this.player.addBuff({ type: 'stat_up', buffStats: { intScale: 1.0 }, duration: 3, name: '混沌の知性', desc: 'INT+100%' });
                     this.log("混沌の知性！(INT+100%)");
+                    this.recalcStats();
                     break;
                 case 4: 
                     this.player.addBuff({ type: 'stat_up', buffStats: { spd: this.player.spd }, duration: 3, name: '混沌の加速', desc: 'SPD+100%' });
                     this.log("混沌の加速！(SPD+100%)");
+                    this.recalcStats();
                     break;
                 case 5: 
                     this.player.addBuff({ type: 'evasion_up', val: 30, duration: 3, name: '混沌の幻影', desc: '回避率+30%' });
@@ -4790,6 +5165,7 @@ applyCurseToEnemy(amount) {
                         const texts = ["体が急激に縮んでいく！", "視界が巨大化した！？ いや、私が小さくなったのか！", "まるで人形のようなサイズに！"];
                         this.log(texts[randomInt(0, texts.length - 1)]);
                         this.player.shrinkLevel = Math.min(3, this.player.shrinkLevel + 3);
+                        this.recalcStats();
                     }
                     break;
                 case 13: 
@@ -4833,6 +5209,7 @@ applyCurseToEnemy(amount) {
                 case 16: // 毒
                     this.player.addStatus('poison');
                     this.log("毒霧を吸い込んでしまった！");
+                    this.recalcStats();
                     break;
                 // ▼ 変更: 脱衣判定の拡張
                 case 17: 
@@ -4844,6 +5221,7 @@ applyCurseToEnemy(amount) {
                         // 通常時は強制脱衣
                         this.processForceStrip();
                     }
+                    this.recalcStats();
                     break;
 
                 case 18: // 何も起こらない
@@ -4896,6 +5274,54 @@ applyCurseToEnemy(amount) {
                                 this.tempInventory.push(newCard);
                             }
                             this.log("魔法カード「ただの石」を手に入れた！");
+                        }
+                    }
+                    break;
+                
+                // ▼▼▼ 新規追加 ▼▼▼
+                case 22: // 縮小化レベル-1
+                    if (this.player.shrinkLevel > this.getMinShrinkLevel()) {
+                        this.player.shrinkLevel--;
+                        this.log("混沌の奇跡で体が少し戻った！ (縮小Lv-1)");
+                        this.recalcStats(); // 即時反映
+                    } else {
+                        this.log("体が元に戻ろうとしたが、何かに阻まれた！");
+                    }
+                    break;
+                
+                case 23: // 膨張レベル-1
+                    if (this.player.expansionLevel > this.getMinExpansionLevel()) {
+                        this.player.expansionLevel--;
+                        this.log("混沌の奇跡で膨張が少し収まった！ (膨張Lv-1)");
+                        this.recalcStats(); // 即時反映
+                    } else {
+                        this.log("膨張が収まろうとしたが、何かに阻まれた！");
+                    }
+                    break;
+
+                case 24: // 永続ステータス強化
+                    {
+                        const stats = ['maxHp', 'atk', 'def', 'int', 'spd'];
+                        const targetStat = stats[randomInt(0, stats.length - 1)];
+                        const value = (targetStat === 'maxHp') ? 5 : 2;
+                        
+                        this.playerBaseStats[targetStat] += value;
+                        this.log(`混沌の祝福が肉体に宿る！ (基礎${targetStat.toUpperCase()}+${value} 永続)`);
+                        this.recalcStats(); // 即時反映
+                    }
+                    break;
+
+                case 25: // 装備品入手
+                    {
+                        const loot = this.generateLoot();
+                        if (loot) {
+                            if (this.mode === 'rogue') {
+                                if (loot.cost !== undefined) this.cardPool.push(loot);
+                                else this.permInventory.push(loot);
+                            } else {
+                                this.tempInventory.push(loot);
+                            }
+                            this.log(`時空の裂け目から装備品が！ 『${loot.name}』を手に入れた！`);
                         }
                     }
                     break;
@@ -5009,6 +5435,11 @@ applyCurseToEnemy(amount) {
 
         // 脱衣状態を付与 (永続扱い)
         this.player.addStatus('undressing', 99); // 永続扱いで付与
+        
+        // ステータス即時反映
+        this.recalcStats();
+        this.updateCharacterSprite();
+        this.updateStatsUI();
         
         // 演出テキストのランダム抽選
         const patterns = [
@@ -5432,17 +5863,11 @@ adjustSpringStatus(type, delta) {
                 if (eventData.event) {
                     // 脱衣・膨張処理
                     if (eventData.event === 'strip') {
-                        if (!this.player.hasStatus('undressing') && !this.player.isLiberated) {
-                            this.player.addStatus('undressing', 99);
-                        }
+                        this.processForceStrip();
                     } 
                     else if (eventData.event.startsWith('expand')) {
-                        if (this.player.expansionLevel < 4) {
-                            this.player.expansionLevel++;
-                        }
+                        this.processExpansion(1);
                     }
-                    this.updateCharacterSprite();
-                    this.updateStatsUI();
                 }
 
                 if (eventData.action) {
@@ -5582,6 +6007,9 @@ adjustSpringStatus(type, delta) {
         bubble.className = 'speech-bubble visible';
         bubble.innerText = text;
 
+        // ▼ 追加: 最後のセリフとして記憶
+        this.lastFairyDialogue = text;
+
         // 3. body直下に追加（左パネルの制限を受けないようにする）
         document.body.appendChild(bubble);
 
@@ -5606,7 +6034,26 @@ adjustSpringStatus(type, delta) {
 
     getRandomDialogue(arr) {
         if (!arr || arr.length === 0) return "";
-        return arr[Math.floor(Math.random() * arr.length)];
+        
+        // 候補が1つしかない場合は、テキストを抽出して返す
+        if (arr.length === 1) {
+            const entry = arr[0];
+            if (typeof entry === 'string') return entry;
+            return entry.dialogue || entry.text || "";
+        }
+
+        let choice;
+        let text;
+        do {
+            choice = arr[Math.floor(Math.random() * arr.length)];
+            if (typeof choice === 'string') {
+                text = choice;
+            } else {
+                text = choice.dialogue || entry.text || "";
+            }
+        } while (text === this.lastFairyDialogue);
+
+        return text;
     }
 
     // ▼ 追加: 汎用セリフプールから安全に取得するヘルパー
@@ -5615,13 +6062,7 @@ adjustSpringStatus(type, delta) {
 
         // パターンA: 単純な配列の場合 ([{dialogue:...}, ...])
         if (Array.isArray(this.currentDialoguePool)) {
-            if (this.currentDialoguePool.length === 0) return "";
-            const entry = this.currentDialoguePool[Math.floor(Math.random() * this.currentDialoguePool.length)];
-            
-            // 文字列ならそのまま返す
-            if (typeof entry === 'string') return entry;
-
-            return entry.dialogue || entry.text || "";
+            return this.getRandomDialogue(this.currentDialoguePool);
         }
 
         // パターンB: カテゴリ分けされたオブジェクトの場合 ({ normal: [...], ... })
@@ -5632,12 +6073,7 @@ adjustSpringStatus(type, delta) {
             const pool = this.currentDialoguePool[key];
             
             if (Array.isArray(pool) && pool.length > 0) {
-                const entry = pool[Math.floor(Math.random() * pool.length)];
-                
-                // 文字列ならそのまま返す
-                if (typeof entry === 'string') return entry;
-
-                return entry.dialogue || entry.text || "";
+                return this.getRandomDialogue(pool);
             }
         }
 
@@ -5674,6 +6110,29 @@ adjustSpringStatus(type, delta) {
 
         // 膨張が0になった後（脱衣状態）で1秒待機
         await wait(1000);
+
+        // ▼ 追加: 膨張リバウンド（縮小化）イベント
+        let isRebound = false;
+        // 条件: 到達Lv1~3, 確率20%, まだ縮小限界でない
+        if (maxReachedLv >= 1 && maxReachedLv <= 3 && this.player.shrinkLevel < 3 && Math.random() < 0.2) {
+            isRebound = true;
+            this.log("急激な魔力の消費により、反動が来た……！");
+            
+            // 演出
+            this.triggerShake('shake-char');
+            await wait(500);
+
+            // 縮小適用
+            this.player.shrinkLevel++;
+            this.registerCollection('statuses', 'shrink');
+            
+            this.recalcStats();
+            this.updateCharacterSprite();
+            this.updateStatsUI();
+            
+            this.showToast("魔力枯渇：体が縮んでしまった！", "warning");
+            await wait(1000);
+        }
 
         // 脱衣状態の解除 (装備由来でなければ)
         let isEquipStrip = false;
@@ -5712,18 +6171,29 @@ adjustSpringStatus(type, delta) {
         this.clickStreak = 0;
 
         // 完了後のセリフ再生
-        // 直前まで到達していたレベルに応じて分岐
-        
-        // ▼ 追加: データソースの切り替え
-        const resetData = (this.player.isLiberated && typeof RESET_DIALOGUE_LIBERATION !== 'undefined')
-                          ? RESET_DIALOGUE_LIBERATION
-                          : RESET_DIALOGUE;
-
-        const dialogueKey = `lv${maxReachedLv}`;
-        const dialogueList = resetData[dialogueKey] || resetData['lv0'];
-        const text = this.getRandomDialogue(dialogueList);
-        
-        this.showFairyMessage(text);
+        if (isRebound) {
+            const reboundTexts = [
+                "ふぅ……。やっと元の大きさに……あれ？ なんだか、視界が高くなってませんか？ いえ、私が小さくなってる！？",
+                "はぁ、はぁ……。魔力を使いすぎちゃいました……。戻そうとして力みすぎて、反動で縮んじゃったみたいです……力が出ません……。",
+                "うぅ……空気が抜けたみたいにシュルシュルって……。勢い余って、縮みすぎちゃいました。豆粒みたいになっちゃいましたよぉ……。",
+                "体が軽いです……軽すぎて、ふわふわします。……あの、私、ちゃんと見えてますか？ 消えてませんよね？",
+                "膨らんだり縮んだり……もう、私の体どうなってるんですかぁ……。これじゃあ、お人形さんサイズですよ。踏まないでくださいね？"
+            ];
+            this.showFairyMessage(this.getRandomDialogue(reboundTexts));
+        } else {
+            // 直前まで到達していたレベルに応じて分岐
+            
+            // ▼ 追加: データソースの切り替え
+            const resetData = (this.player.isLiberated && typeof RESET_DIALOGUE_LIBERATION !== 'undefined')
+                              ? RESET_DIALOGUE_LIBERATION
+                              : RESET_DIALOGUE;
+    
+            const dialogueKey = `lv${maxReachedLv}`;
+            const dialogueList = resetData[dialogueKey] || resetData['lv0'];
+            const text = this.getRandomDialogue(dialogueList);
+            
+            this.showFairyMessage(text);
+        }
         
         // ボタンの状態を元に戻す
         const startBtn = document.getElementById('btn-start-dungeon');

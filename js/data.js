@@ -1696,6 +1696,28 @@ const ENDGAME_ITEMS = [
         type: 'weapon',
         stats: { int: 200 },
         passive: { statMultiplier: { int: 2.0, spd: 2.0 }, nullifyBadStatus: ['distraction'] }
+    },
+    // 400層ボス報酬
+    {
+        id: 'acc_spica_tag', name: 'スピカの名札', category: 'accessory', tier: 'godly',
+        desc: 'スピカはここにいるからね。',
+        type: 'accessory',
+        stats: {},
+        passive: { 
+            name: 'スピカの加護',
+            handSizeMod: 1, startCharge: true, dmgCut: 0.3, extraAttacks: 2 
+        }
+    },
+    {
+        id: 'mc_archmage_grace', name: '大魔導士の恩寵', category: 'magic_circle', tier: 'godly',
+        desc: 'ご主人様、スピカのこと……ずっと見ててね。',
+        type: 'magic_circle',
+        stats: {},
+        passive: { 
+            name: '大魔導士の叡智',
+            stats: { hpMult: 1.3, atkMult: 1.3, defMult: 1.3, intMult: 1.3, spdMult: 1.3 },
+            nullifyStatus: true, nullifyShrink: true, nullifyExpansion: true
+        }
     }
 ];
 
@@ -1772,24 +1794,24 @@ const WEAPON_ARTS_LOGIC = {
 // 敵の思考ルーチン定義
 const ENEMY_ROUTINES = {
     // --- 弱い敵 (Weak) : 序盤のみ ---
-    WEAK_A: { type: 'weak', id: 'w_basic', desc: '攻撃、様子見のみ' },
-    WEAK_B: { type: 'weak', id: 'w_aggressive', desc: '毎ターン攻撃のみ' },
-    WEAK_C: { type: 'weak', id: 'w_cycle', desc: '様子見と強撃を交互に行う' },
-    WEAK_D: { type: 'weak', id: 'w_guard', desc: '攻撃、防御のみ' },
+    WEAK_A: { type: 'weak', id: 'w_basic', name: 'ゴブリン', desc: '攻撃、様子見のみ' },
+    WEAK_B: { type: 'weak', id: 'w_aggressive', name: 'ウルフ', desc: '毎ターン攻撃のみ' },
+    WEAK_C: { type: 'weak', id: 'w_cycle', name: 'オーク', desc: '様子見と強撃を交互に行う' },
+    WEAK_D: { type: 'weak', id: 'w_guard', name: 'タートル', desc: '攻撃、防御のみ' },
 
     // --- ふつうの敵 (Normal) : 中盤以降 ---
-    NORMAL_A: { type: 'normal', id: 'n_random', desc: '攻撃、様子見、強撃をランダム' },
-    NORMAL_B: { type: 'normal', id: 'n_tough', desc: '毎ターン攻撃（HP補正あり）', statMod: { hp: 1.3 } },
-    NORMAL_C: { type: 'normal', id: 'n_status', desc: '2ターン目以降ランダムで状態異常（1種固定）' },
-    NORMAL_D: { type: 'normal', id: 'n_shrink_low', desc: '4ターン目に低確率縮小化' },
+    NORMAL_A: { type: 'normal', id: 'n_random', name: 'ホブゴブリン', desc: '攻撃、様子見、強撃をランダム' },
+    NORMAL_B: { type: 'normal', id: 'n_tough', name: 'ミノタウロス', desc: '毎ターン攻撃（HP補正あり）', statMod: { hp: 1.3 } },
+    NORMAL_C: { type: 'normal', id: 'n_status', name: 'ウィッチ', desc: '2ターン目以降ランダムで状態異常（1種固定）' },
+    NORMAL_D: { type: 'normal', id: 'n_shrink_low', name: 'ピクシー', desc: '4ターン目に低確率縮小化' },
 
     // --- 強い敵 (Strong) : 深層以降 ---
-    STRONG_A: { type: 'strong', id: 's_heavy', desc: '強撃と様子見（強撃多め）' },
-    STRONG_B: { type: 'strong', id: 's_first_status', desc: '1ターン目に確定で状態異常' },
-    STRONG_C: { type: 'strong', id: 's_elite', desc: '毎ターン攻撃（HP/ATK補正あり）', statMod: { hp: 1.5, atk: 1.2 } },
-    STRONG_D: { type: 'strong', id: 's_shrink_mid', desc: '3ターン目に中確率縮小化' },
-    STRONG_E: { type: 'strong', id: 's_guard_heavy', desc: '防御と強撃を交互' },
-    STRONG_F: { type: 'strong', id: 's_fixed_combo', desc: '固定コンボ（攻撃→必中縮小→強撃→解除→攻撃...）' }
+    STRONG_A: { type: 'strong', id: 's_heavy', name: 'ゴーレム', desc: '強撃と様子見（強撃多め）' },
+    STRONG_B: { type: 'strong', id: 's_first_status', name: 'サキュバス', desc: '1ターン目に確定で状態異常' },
+    STRONG_C: { type: 'strong', id: 's_elite', name: 'オーガ', desc: '毎ターン攻撃（HP/ATK補正あり）', statMod: { hp: 1.5, atk: 1.2 } },
+    STRONG_D: { type: 'strong', id: 's_shrink_mid', name: 'ハイピクシー', desc: '3ターン目に中確率縮小化' },
+    STRONG_E: { type: 'strong', id: 's_guard_heavy', name: 'アイアンゴーレム', desc: '防御と強撃を交互' },
+    STRONG_F: { type: 'strong', id: 's_fixed_combo', name: 'デュラハン', desc: '固定コンボ（攻撃→必中縮小→強撃→解除→攻撃...）' }
 };
 
 // --- 特殊アイテム定義 ---
@@ -1982,8 +2004,6 @@ CARD_DATABASE.push(
         cost: 2,
         desc: '縮小化Lv+1。次のターンまで回避率+100%。(縮小化していないと不発)',
         effect: (user, target) => {
-            if (user.shrinkLevel <= 0) return { msg: "縮小化していないため不発！" };
-            
             user.shrinkLevel = Math.min(3, user.shrinkLevel + 1);
             
             user.addBuff({
@@ -3124,6 +3144,177 @@ const CLICK_EVENT_DIALOGUE = {
     ]
 };
 
+// ==========================================
+// ▼ 追加データ: ユニークボス定義
+// ==========================================
+const UNIQUE_BOSSES = {
+    20: {
+        name: 'コカトリス',
+        statMod: { hp: 3.0 },
+        routine: (enemy, turnCount) => {
+            if (turnCount % 3 === 0) return { type: 'skill_status', status: 'petrification', label: '石化の魔眼', icon: '👁️' };
+            return 'attack';
+        }
+    },
+    40: {
+        name: 'キラーラビット',
+        statMod: { hp: 3.0 },
+        routine: (enemy, turnCount) => {
+            if (turnCount <= 3) return 'wait';
+            return 'heavy_attack';
+        }
+    },
+    60: {
+        name: 'ジャイアント',
+        statMod: { hp: 3.0 },
+        routine: (enemy, turnCount) => {
+            if (Math.random() < 0.25) return { type: 'stomp', label: 'ストンプ', icon: '💥' };
+            return 'attack';
+        }
+    },
+    80: {
+        name: 'ローパーホール',
+        statMod: { hp: 3.0 },
+        routine: (enemy, turnCount) => {
+            if (Math.random() < 0.5) return { type: 'entangle', label: 'からみつき', icon: '🐙' };
+            return 'attack';
+        }
+    },
+    100: {
+        name: '魔術師の幻影',
+        statMod: { hp: 3.0, atk: 1.5 },
+        routine: (enemy, turnCount) => {
+            if (turnCount === 1) return { type: 'flare_pillar', label: 'フレアピラー', icon: '🔥' };
+            return 'random_attack';
+        }
+    },
+    120: {
+        name: 'アイアンウォール',
+        statMod: { hp: 3.0, def: 5.0 },
+        routine: (enemy, turnCount) => {
+            if (turnCount % 2 === 1) return { type: 'skill_status', status: 'poison', label: '毒の胞子', icon: '💀' };
+            return 'defend';
+        }
+    },
+    140: {
+        name: 'ドラゴン',
+        statMod: { hp: 3.0 },
+        routine: (enemy, turnCount) => {
+            if (turnCount % 2 === 1) return 'heavy_attack';
+            return { type: 'hot_breath', label: 'ホットブレス', icon: '🔥' };
+        }
+    },
+    160: {
+        name: 'グラディエーター',
+        statMod: { hp: 3.0 },
+        routine: (enemy, turnCount) => {
+            if (Math.random() < 0.5) return { type: 'trash_blow', label: 'トラッシュブロー', icon: '🗑️' };
+            return 'attack';
+        }
+    },
+    180: {
+        name: '守衛の石像',
+        statMod: { hp: 3.0, def: 3.0 },
+        routine: (enemy, turnCount) => {
+            if (turnCount >= 2) return { type: 'stone_blow', label: 'ストーンブロー', icon: '🗿' };
+            return 'attack';
+        }
+    },
+    200: {
+        name: '転生の蝶',
+        statMod: { hp: 3.0 },
+        routine: (enemy, turnCount) => {
+            if (turnCount <= 3) return { type: 'little_powder', label: 'リトルパウダー', icon: '✨' };
+            return 'random_attack';
+        }
+    },
+    220: {
+        name: '鎧の騎士',
+        statMod: { hp: 3.0 },
+        routine: () => ({ type: 'heavy_slash', label: 'ヘビースラッシュ', icon: '⚔️' })
+    },
+    240: {
+        name: 'カオスドラゴン',
+        statMod: { hp: 3.0 },
+        routine: (enemy, turnCount) => {
+            if (turnCount % 2 === 1) return 'heavy_attack';
+            return { type: 'dark_breath', label: 'ダークブレス', icon: '💀' };
+        }
+    },
+    260: {
+        name: 'ダンサードール',
+        statMod: { hp: 3.0 },
+        routine: (enemy, turnCount) => {
+            if (turnCount === 1) return { type: 'duo_step', label: 'デュオステップ', icon: '💃' };
+            return 'attack';
+        }
+    },
+    280: {
+        name: '禁術の預言書',
+        statMod: { hp: 3.0 },
+        routine: (enemy, turnCount) => {
+            if (turnCount <= 6) return { type: 'fall_meteor', label: 'フォールメテオ', icon: '☄️' };
+            if (turnCount === 7) return 'wait';
+            if (turnCount === 8) return { type: 'world_end', label: 'ワールドエンド', icon: '💥' };
+            return 'random_attack';
+        }
+    },
+    300: {
+        name: '勇者？',
+        statMod: { hp: 3.0 },
+        routine: (enemy, turnCount) => {
+            if (turnCount === 1) return { type: 'leadership', label: '統率', icon: '👑' };
+            if (turnCount === 6) return { type: 'light_calibur', label: 'ライトカリバー', icon: '💥' };
+            return 'random_attack';
+        }
+    },
+    320: {
+        name: 'トラップハウス',
+        statMod: { hp: 3.0, def: 5.0 },
+        routine: () => {
+            const r = Math.random();
+            if (r < 0.33) return { type: 'welcome_gate', label: 'ウェルカムゲート', icon: '✨' };
+            if (r < 0.66) return { type: 'enjoy_doll', label: 'エンジョイドール', icon: '🎀' };
+            return 'attack';
+        }
+    },
+    340: {
+        name: 'フロートブレード',
+        statMod: { hp: 3.0, atk: 2.0 },
+        routine: () => {
+            const r = Math.random();
+            if (r < 0.33) return { type: 'great_spin', label: '大回転', icon: '🌀' };
+            if (r < 0.66) return 'heavy_attack';
+            return 'attack';
+        }
+    },
+    360: {
+        name: '魔人の鎧',
+        statMod: { hp: 5.0, def: 5.0 },
+        routine: () => {
+            if (Math.random() < 0.5) return { type: 'arm_rocket', label: 'アームロケット', icon: '🚀' };
+            return 'heavy_attack';
+        }
+    },
+    380: {
+        name: '妖精の影',
+        statMod: { hp: 2.0, atk: 2.5 },
+        routine: (enemy, turnCount) => {
+            if (turnCount === 1) return { type: 'sylphid', label: 'シルフィード', icon: '💨' };
+            return 'random_attack';
+        }
+    },
+    400: {
+        name: '漆黒の魔王',
+        statMod: { hp: 3.0 },
+        routine: (enemy, turnCount) => {
+            if (turnCount === 1) return { type: 'chaos_bolt', label: 'カオスボルト', icon: '⚡' };
+            if (turnCount === 6) return { type: 'symbol_of_fear', label: '畏怖の象徴', icon: '💥' };
+            return 'random_attack';
+        }
+    }
+};
+
 // ▼▼▼ 追加: 解放状態用連打イベントデータ (Liberation Ver.) ▼▼▼
 const CLICK_EVENT_DIALOGUE_LIBERATION = {
     // Phase 1: Strip (解放状態なので既に脱衣済み)
@@ -3361,3 +3552,90 @@ const FAIRY_TALK_EXPANSION = {
         "あはぁ……。ちょっと揺らしただけで、全身に波紋みたいに快感が広がるんです。……ねえ、これ、もう戻れない体になってませんか？"
     ]
 };
+
+
+// ==========================================
+// ▼ 追加データ: 冒険譚・日記 (Story of Spica)
+// ==========================================
+const DIARY_DATA = [
+    {
+        title: "第1話：最初の記憶",
+        content: "森の入り口で目が覚めた。\n私は自分が誰なのか、どうしてここにいるのかよく分からない。\nただ、この深く暗いダンジョンの奥底から、懐かしい風が吹いてくるのを感じた。\n……行かなくちゃ。足が勝手にそう言っている。"
+    },
+    {
+        title: "第2話：お気に入りのドレス",
+        content: "私が着ているこの青いドレス。\nひらひらして、少し動きにくいけれど、とても大切なお洋服。\nこれは私が魔法を教わって、初めて自分で織り上げた「魔力布」のドレスだ。\n……誰に教わったんだっけ？ 思い出そうとすると、霧がかかったようになる。"
+    },
+    {
+        title: "第3話：あたたかな手",
+        content: "ダンジョンの探索にも少し慣れてきた。\n魔法を使うとき、ふと、頭を撫でられるような感覚を覚える。\n大きな、節くれだった、温かい手。\nそうだ、私には「ご主人様」がいたはずだ。厳しくて、でも優しい魔法使い様が。"
+    },
+    {
+        title: "第4話：はじまりの炎",
+        content: "ご主人様は、私に魔力の扱い方を一から教えてくれた。\n最初に覚えたのは、小さな炎を灯す魔法。\n『スピカ、焦るな。火は熱いが、心を照らす灯りにもなる』\n……スピカ。それが私の名前。一番星のように輝くようにと、彼がつけてくれた。"
+    },
+    {
+        title: "第5話：紫電の輝き",
+        content: "次に教わったのは、雷の魔法だ。\nバチバチして怖かったけれど、ご主人様は笑って見本を見せてくれた。\nあの時の彼の横顔は、なんだかとても誇らしげで、少しだけ寂しそうだった。\nどうしてそんな顔をしていたんだろう？"
+    },
+    {
+        title: "第6話：癒やしの光",
+        content: "傷を癒やす魔法。これは私が一番得意だった。\n『お前は優しい子だからな』\nそう言ってくれた言葉が、今でも胸の奥に残っている。\n私が持っている魔法のカード……これは全部、彼との思い出の結晶なんだ。"
+    },
+    {
+        title: "第7話：一人の時間",
+        content: "ダンジョンに潜って、どれくらい経っただろう。\nここには私と、魔物たちしかいない。\n時々、無性に誰かの声が聞きたくなる。\nご主人様は今、どこにいるの？ どうして私は一人ぼっちなの？"
+    },
+    {
+        title: "第8話：魔力の奔流",
+        content: "深層へ進むにつれて、魔力の濃度が濃くなっている。\n普通の人間なら酔ってしまうような濃さだ。\nでも、不思議と苦しくない。むしろ、水を得た魚のように体が軽くなる。\n私の体は、この魔力に馴染みすぎている気がする。"
+    },
+    {
+        title: "第9話：変化する体",
+        content: "ダンジョンの魔力に当てられて、私の体は時々おかしなことになる。\n大きくなったり、小さくなったり、熱くなったり。\n恥ずかしいけれど、どこか心地よさもある。\nご主人様が見たらなんて言うかな。『はしたない』って叱られるかな。"
+    },
+    {
+        title: "第10話：長い眠り",
+        content: "少しずつ記憶が鮮明になってきた。\n私は長い間、眠っていたんだと思う。\n森で目覚めるずっと前、深い深い闇の中で、水晶に包まれて。\n……誰が私を眠らせたの？ それとも、封印されていたの？"
+    },
+    {
+        title: "第11話：違和感",
+        content: "このダンジョンは、ただの洞窟じゃない。\n壁の模様、床の石材、漂う空気……。\nすべてに見覚えがある。\n私は「外」からここへ来たんじゃない。私は「ここ」を知っている。"
+    },
+    {
+        title: "第12話：魔王の影",
+        content: "思い出した。ご主人様はただの魔法使いじゃなかった。\n彼は「勇者」と呼ばれる人たちと共に戦う、偉大な魔導師だった。\n世界を脅かす、強大な闇……魔王を討つために、旅をしていたんだ。"
+    },
+    {
+        title: "第13話：最後の戦い",
+        content: "激しい戦いの記憶。\n空が燃え、大地が裂けるような轟音。\nご主人様は傷だらけになりながら、それでも杖を放さなかった。\n私は彼の背中に隠れて、震えることしかできなかった。"
+    },
+    {
+        title: "第14話：決別",
+        content: "魔王は強すぎた。勇者様たちも倒れ、万事休すかと思われた時。\nご主人様は私を見て、優しく微笑んだ。\n『スピカ、お前は生きろ』\nそして彼は、禁断の魔法を……自らの命を糧にする魔法を詠唱し始めた。"
+    },
+    {
+        title: "第15話：逆流する記憶",
+        content: "私は森で目覚めたんじゃない。\nあの日、ご主人様の最期の魔法で、時空の彼方へ飛ばされていたんだ。\nそして長い時を経て、魔力が満ちるこの場所へ呼び戻された。\n……ううん、違う。私が「戻ろう」としたんだ。"
+    },
+    {
+        title: "第16話：帰郷",
+        content: "ここはダンジョンなんかじゃない。\nここは、あの日ご主人様が魔王と刺し違えた、決戦の地。\n魔王の亡骸と、ご主人様の魔力が混ざり合い、長い年月をかけてこの迷宮を作り出した。\nだから、こんなにも魔力が懐かしいんだ。"
+    },
+    {
+        title: "第17話：最奥へ",
+        content: "魔物の気配が強くなる。でも、怖くはない。\nこの先にいるのは、魔王の残滓か、それとも……。\n足が震える。でも止まらない。\n確認しなくちゃいけない。あの日、彼がどうなったのかを。"
+    },
+    {
+        title: "第18話：使命",
+        content: "ご主人様の最期の言葉を思い出した。\n『時が来たら、起こしに来てくれ。二人でまた、魔法の練習をしよう』\nそれは叶わぬ願いかもしれない。ただの気休めだったのかもしれない。\nそれでも、私はその約束を果たすために戻ってきた。"
+    },
+    {
+        title: "第19話：扉の前で",
+        content: "最下層の扉が目の前にある。\nこの向こうに、全ての答えがある。\n心臓が痛いほど脈打っている。\n……行こう。泣いても笑っても、これが最後だ。"
+    },
+    {
+        title: "第20話：おはよう、ご主人様",
+        content: "……やっと会えましたね、ご主人様。\n随分と長いお寝坊さんでしたね。\n世界は平和になりましたよ。貴方が命を賭けて守ったおかげです。\n\nねえ、約束通り、また魔法を教えてくれますか？\n今の私、貴方がびっくりするくらい強くなったんですよ。\n\n……ずっと、ずっと会いたかったです。\nさあ、おうちに帰りましょう。"
+    }
+];

@@ -833,17 +833,17 @@ body {
 
 /* 通常の揺れ（クリック時など） */
 @keyframes shake_char_anim {
-    0% { transform: translateX(-50%) translate(0, 0) rotate(0deg); }
-    10% { transform: translateX(-50%) translate(-2px, -2px) rotate(-1deg); }
-    20% { transform: translateX(-50%) translate(2px, 2px) rotate(1deg); }
-    30% { transform: translateX(-50%) translate(-2px, 2px) rotate(0deg); }
-    40% { transform: translateX(-50%) translate(2px, -2px) rotate(1deg); }
-    50% { transform: translateX(-50%) translate(-2px, 0) rotate(-1deg); }
-    60% { transform: translateX(-50%) translate(2px, 0) rotate(0deg); }
-    70% { transform: translateX(-50%) translate(0, 2px) rotate(0deg); }
-    80% { transform: translateX(-50%) translate(-2px, 0) rotate(0deg); }
-    90% { transform: translateX(-50%) translate(2px, 0) rotate(0deg); }
-    100% { transform: translateX(-50%) translate(0, 0) rotate(0deg); }
+    0% { transform: translateX(-50%) translateY(var(--fairy-y, 0px)) scale(var(--fairy-scale, 1)) translate(0, 0) rotate(0deg); }
+    10% { transform: translateX(-50%) translateY(var(--fairy-y, 0px)) scale(var(--fairy-scale, 1)) translate(-2px, -2px) rotate(-1deg); }
+    20% { transform: translateX(-50%) translateY(var(--fairy-y, 0px)) scale(var(--fairy-scale, 1)) translate(2px, 2px) rotate(1deg); }
+    30% { transform: translateX(-50%) translateY(var(--fairy-y, 0px)) scale(var(--fairy-scale, 1)) translate(-2px, 2px) rotate(0deg); }
+    40% { transform: translateX(-50%) translateY(var(--fairy-y, 0px)) scale(var(--fairy-scale, 1)) translate(2px, -2px) rotate(1deg); }
+    50% { transform: translateX(-50%) translateY(var(--fairy-y, 0px)) scale(var(--fairy-scale, 1)) translate(-2px, 0) rotate(-1deg); }
+    60% { transform: translateX(-50%) translateY(var(--fairy-y, 0px)) scale(var(--fairy-scale, 1)) translate(2px, 0) rotate(0deg); }
+    70% { transform: translateX(-50%) translateY(var(--fairy-y, 0px)) scale(var(--fairy-scale, 1)) translate(0, 2px) rotate(0deg); }
+    80% { transform: translateX(-50%) translateY(var(--fairy-y, 0px)) scale(var(--fairy-scale, 1)) translate(-2px, 0) rotate(0deg); }
+    90% { transform: translateX(-50%) translateY(var(--fairy-y, 0px)) scale(var(--fairy-scale, 1)) translate(2px, 0) rotate(0deg); }
+    100% { transform: translateX(-50%) translateY(var(--fairy-y, 0px)) scale(var(--fairy-scale, 1)) translate(0, 0) rotate(0deg); }
 }
 
 .shake-char {
@@ -853,17 +853,17 @@ body {
 
 /* 激しい揺れ（ダメージ、興奮時など） */
 @keyframes shake_char_strong_anim {
-    0% { transform: translateX(-50%) translate(0, 0) rotate(0deg); }
-    10% { transform: translateX(-50%) translate(-5px, -5px) rotate(-5deg); }
-    20% { transform: translateX(-50%) translate(5px, 5px) rotate(5deg); }
-    30% { transform: translateX(-50%) translate(-5px, 5px) rotate(-5deg); }
-    40% { transform: translateX(-50%) translate(5px, -5px) rotate(5deg); }
-    50% { transform: translateX(-50%) translate(-5px, 0) rotate(-5deg); }
-    60% { transform: translateX(-50%) translate(5px, 0) rotate(5deg); }
-    70% { transform: translateX(-50%) translate(0, 5px) rotate(0deg); }
-    80% { transform: translateX(-50%) translate(-5px, 0) rotate(0deg); }
-    90% { transform: translateX(-50%) translate(5px, 0) rotate(0deg); }
-    100% { transform: translateX(-50%) translate(0, 0) rotate(0deg); }
+    0% { transform: translateX(-50%) translateY(var(--fairy-y, 0px)) scale(var(--fairy-scale, 1)) translate(0, 0) rotate(0deg); }
+    10% { transform: translateX(-50%) translateY(var(--fairy-y, 0px)) scale(var(--fairy-scale, 1)) translate(-5px, -5px) rotate(-5deg); }
+    20% { transform: translateX(-50%) translateY(var(--fairy-y, 0px)) scale(var(--fairy-scale, 1)) translate(5px, 5px) rotate(5deg); }
+    30% { transform: translateX(-50%) translateY(var(--fairy-y, 0px)) scale(var(--fairy-scale, 1)) translate(-5px, 5px) rotate(-5deg); }
+    40% { transform: translateX(-50%) translateY(var(--fairy-y, 0px)) scale(var(--fairy-scale, 1)) translate(5px, -5px) rotate(5deg); }
+    50% { transform: translateX(-50%) translateY(var(--fairy-y, 0px)) scale(var(--fairy-scale, 1)) translate(-5px, 0) rotate(-5deg); }
+    60% { transform: translateX(-50%) translateY(var(--fairy-y, 0px)) scale(var(--fairy-scale, 1)) translate(5px, 0) rotate(5deg); }
+    70% { transform: translateX(-50%) translateY(var(--fairy-y, 0px)) scale(var(--fairy-scale, 1)) translate(0, 5px) rotate(0deg); }
+    80% { transform: translateX(-50%) translateY(var(--fairy-y, 0px)) scale(var(--fairy-scale, 1)) translate(-5px, 0) rotate(0deg); }
+    90% { transform: translateX(-50%) translateY(var(--fairy-y, 0px)) scale(var(--fairy-scale, 1)) translate(5px, 0) rotate(0deg); }
+    100% { transform: translateX(-50%) translateY(var(--fairy-y, 0px)) scale(var(--fairy-scale, 1)) translate(0, 0) rotate(0deg); }
 }
 
 .shake-char-strong {
